@@ -4,13 +4,13 @@ Reverse-engineered from HTTP responses and community integrations. **Not** offic
 
 ## Classification — matched and usable for display
 
-On **verified home rigs** (multiple controllers: flower 3×3, drying 3×3, 2×4, seedling/mom), we **matched physical gear to API fields** and **proved a consistent way to show what each port is**:
+On **verified home setups**—**several independent UIS controllers**, each with ports labeled in the app—we **matched physical gear to API fields** and **proved a consistent way to show what each port is**:
 
 | Goal | How we derive it |
 |------|------------------|
-| **Fan vs humidifier vs grow light** | **`getDevSetting.data.loadType`**: `6` = UIS EC **fan**, `2` = **humidifier**, `1` = **grow light** (Evo-class in our samples). |
+| **Fan vs humidifier vs grow light** | **`getDevSetting.data.loadType`**: `6` = UIS EC **fan**, `2` = **humidifier**, `1` = **grow light** (LED-class in our samples). |
 | **When the list lies** | `devInfoListAll` often has **`loadType: 0`** on a connected port; **`getDevSetting`** still returns the correct non-zero class for the same `devId` + `port`. |
-| **Backup fingerprint** | **`portResistance`** on the live list repeatedly aligned: **`5100`** with fans, **`12000`** with humidifier, **`3300`** with Evo — same values with loads **off** or **on** (identity, not power state). |
+| **Backup fingerprint** | **`portResistance`** on the live list repeatedly aligned: **`5100`** with fans, **`12000`** with humidifier-class loads, **`3300`** with LED-class loads — same values with loads **off** or **on** (identity, not power state). |
 | **Fine print** | Fan **size** (4″ vs 6″) is **not** a separate `loadType`; both mapped to **`6`**. Use **`portName`** for labels. **`deviceType`** stayed **`null`** in our dumps. |
 
 This is **proven for the devices we actually tested**, not a guarantee for every future UIS SKU or firmware. For unknown products, collect **`loadType` + `portResistance` + product name** and extend the table.
@@ -92,29 +92,29 @@ Top level (typical):
 
 Community / guesswork is not enough here: the same integers appeared when **known** gear was labeled in the app and compared across **`devInfoListAll`**, **`getDevSetting`**, and full debug bundles (including runs with loads **on** vs **idle**).
 
-### Ground truth (3×3 flower tent — reference wiring)
+### Reference setup (one fully labeled controller)
 
-User-reported wiring (port index → physical device):
+Illustrative port map from a single rig where each port was labeled in the app and traced to **`loadType`** / **`portResistance`** (your numbering will differ):
 
 | Port | Device |
 |------|--------|
-| 1 | 6″ inline fan (S6-class EC fan) |
-| 2 | CLOUDFORGE T3 plant humidifier |
-| 3 | 4″ inline fan (S4-class EC fan) |
-| 4 | EVO-style LED grow light |
+| 1 | Larger EC inline fan |
+| 2 | Plant humidifier (UIS) |
+| 3 | Smaller EC inline fan |
+| 4 | LED grow light |
 
 **`loadType` seen for those ports** (from API when non-zero — often `getDevSetting.data.loadType`; list sometimes still `0`):
 
 | `loadType` | Matches these devices in this setup |
 |------------|--------------------------------------|
-| `6` | Both inline EC fans (6″ and 4″) — **size is not encoded** in `loadType`; only “fan class” |
-| `2` | CLOUDFORGE / humidifier class |
-| `1` | EVO / LED grow light class |
+| `6` | Both EC inline fans (different sizes) — **size is not encoded** in `loadType`; only “fan class” |
+| `2` | Humidifier class |
+| `1` | LED grow light class |
 | `0` | “Unknown / not sent in this payload” — common on `devInfoListAll` even with gear connected |
 
-So the cloud is not returning “S6 vs S4” as different `loadType` values; both fans were **`6`**. Differentiation would have to come from **`portName`** (user label), **`portResistance`** (see below), or something else we have not mapped.
+So the cloud is not returning “large vs small fan” as different `loadType` values; both fans were **`6`**. Differentiation would have to come from **`portName`** (user label), **`portResistance`** (see below), or something else we have not mapped.
 
-**Cross-checks elsewhere:** Drying 3×3 (humidifier + exhaust), seedling/mom **4″ inline on port 4**, and 2×4 exhaust showed the same **`loadType` / `portResistance` pairings** where `getDevSetting` was available — so the mapping is **not** limited to a single tent.
+**Cross-checks:** The same **`loadType` / `portResistance`** pairings showed up on **other controllers** and **other labeled setups**, not only this reference map—so the mapping is **not** tied to one physical site.
 
 ### `portResistance` — UIS fingerprint (observed, not official)
 
@@ -122,9 +122,9 @@ When gear was connected, **`portResistance`** was **not** the same for every loa
 
 | Approx. `portResistance` | Device class in our rigs |
 |--------------------------|---------------------------|
-| `5100` | UIS **EC inline fans** (4″ and 6″ samples) |
-| `12000` | **Humidifier** / CloudForge-style |
-| `3300` | **Evo / LED** grow light |
+| `5100` | UIS **EC inline fans** (multiple sizes sampled) |
+| `12000` | **Humidifier-class** UIS load |
+| `3300` | **LED grow light** (UIS) |
 
 `65535` = nothing detected on that port in our samples. Other SKUs or firmware may add values; treat unknown codes as “unmapped” until sampled.
 
