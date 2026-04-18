@@ -1,22 +1,58 @@
 # AC Dash
 
-A small web dashboard for **AC Infinity** UIS controllers: tent temps, humidity, VPD, and ports on one screen you can open in a browser—handy on your laptop or any machine on your LAN.
+A **read-only** web dashboard for **AC Infinity** UIS controllers. It pulls the same live picture you get in the official app—**temperature**, **humidity**, **VPD**, and what’s happening on each **port**—and puts it in a browser tab on your computer or any device on your LAN.
 
-I **vibe-coded** this for myself. I was checking my winter veggie tent on my phone all the time and wanted the same live picture on my computer, running in **Docker**, managed through **Portainer**, and reachable from other devices on the network without digging through the phone app every time. The UI is **Tailwind + dark theme** and I tried to keep the **feel close to AC Infinity’s app** (cards, typography-ish hierarchy)—not a pixel-perfect clone, but familiar enough that my brain doesn’t fight it.
+The goal isn’t to replace the AC Infinity app for programming; it’s to **monitor** the environment you’re already controlling with their hardware. Think of the kind of at-a-glance grow-room view products like **Pulse Grow** offer, except here you’re not adding another sensor hub—you’re **reusing the controller and cloud data you already have**.
+
+I **vibe-coded** this for my own use: I kept opening the phone app to sanity-check heat and VPD. I wanted that same snapshot on a big screen, running in **Docker**, easy to manage in **Portainer**, and reachable from other machines on the network without another login flow every time. The UI uses **Tailwind** with a **dark theme** and is deliberately **in the spirit of AC Infinity’s app** (cards, hierarchy, calm greens)—not a pixel-perfect copy, but familiar enough that it feels like the same ecosystem.
 
 ---
 
 ## Credits
 
-The cloud API shape and a lot of the mental model (especially around VPD and sensor scaling) lean on community work. **Huge thanks to [LukeEvansTech/acinfinity-exporter](https://github.com/LukeEvansTech/acinfinity-exporter)**—that Prometheus exporter was the base reference that made poking at the same HTTP API sane. This project is a **dashboard**, not an exporter; same rough API family, different goal.
+The cloud API shape and a lot of the mental model (especially around VPD and sensor scaling) lean on community work. **Huge thanks to [LukeEvansTech/acinfinity-exporter](https://github.com/LukeEvansTech/acinfinity-exporter)**—that Prometheus exporter was the reference that made talking to the same HTTP API approachable. This project is a **dashboard**, not an exporter; same rough API family, different goal.
+
+---
+
+## How your details are stored
+
+AC Dash needs your **AC Infinity cloud email and password** (the same ones as the mobile app) so it can call AC Infinity’s servers on your behalf.
+
+**After setup (default Docker layout):**
+
+- Credentials are written to a **single file** on disk: by default **`/app/data/.env`** inside the container (`ENV_FILE_PATH` overrides this).
+- That file holds `ACINFINITY_EMAIL` and `ACINFINITY_PASSWORD` in standard dotenv form.
+- **Nothing is sent to the author of this project** or to any third party except **AC Infinity’s own API** (`acinfinityserver.com`), same as the app.
+- **Mount a volume** on `/app/data` so a container recreate doesn’t wipe the file; otherwise you’ll see the setup wizard again.
+
+**Optional “headless” mode (Portainer / compose):**
+
+- Set **`ACDASH_USE_ENV_CREDENTIALS=1`** and provide **`ACINFINITY_EMAIL`** and **`ACINFINITY_PASSWORD`** in the container environment.
+- The wizard is skipped when those are present (and you’re not relying on a conflicting saved file—see `app/main.py` for the exact precedence).
+
+**Security hygiene:** don’t commit `.env`, don’t paste **debug JSON dumps** into public issues (they can include account fields, device IDs, Wi‑Fi names, etc.). This repo’s `.gitignore` is set up to steer clear of those.
 
 ---
 
 ## Reverse-engineered API notes (important)
 
-AC Infinity doesn’t publish a public spec for these endpoints. I captured **full debug dumps** from the app and mapped fields like **`loadType`** (equipment class), **`portResistance`** (UIS “fingerprint” on the wire), **`loadState`** vs stale **`state`**, and when **`getDevSetting`** disagrees with the live list.
+AC Infinity does **not** publish a public HTTP spec for their cloud API. Everything below comes from **watching real responses**, comparing them to **equipment we could identify port-by-port in the app**, and cross-checking with the optional **full debug bundle** this dashboard can export.
 
-**Caveat:** I don’t own every UIS device. The mappings in [**`AC_INFINITY_FIELDS.md`**](AC_INFINITY_FIELDS.md) are grounded in **my** tents (fans, humidifier, Evo light). **Other SKUs might reuse the same numbers** or introduce new ones—treat the doc as **observed behavior**, not a guarantee. If you plug in something weird and want to extend the table, the dashboard includes an optional **API debug dump** you can use (don’t commit those JSON files; they can contain account and device identifiers).
+**What we figured out**
+
+- The live list endpoint (`devInfoListAll`) is a **snapshot**: great for “right now,” not historical graphs.
+- **On/off** for a load is **`loadState`**, not always the older **`state`** field—reading the wrong one made ports look blank.
+- **`loadType`** is meant to describe the **class** of device (fan, humidifier, light), but the list often shows **`0`** even when something is plugged in. The **`getDevSetting`** call for the same controller and port usually still returns the **real** non-zero `loadType`.
+- **`portResistance`** behaves like a **UIS electrical / detection fingerprint**: in testing we saw **stable** values for e.g. EC inline fans vs humidifier-class loads vs LED-class loads—with the same readings whether the load was idle or running (identity, not “motor on”). Exact numbers vary by hardware; see **`AC_INFINITY_FIELDS.md`** for the values we sampled.
+- **`deviceType`** was **`null`** everywhere in our samples, so it wasn’t useful for labeling gear.
+
+**How we matched names to numbers**
+
+We labeled ports in the app, exported JSON, and compared **known device types** (fan, humidifier, light, etc.) to **`portResistance`** and **`getDevSetting.loadType`**. The same patterns showed up when comparing **one labeled setup to another** (e.g. **controller / tent A vs. controller / tent B**), which suggested the mapping wasn’t a single-location quirk. Fan **size** (e.g. smaller vs larger inline) did **not** show up as different `loadType` values—only **fan class**—so friendly names still come from **`portName`** in the app.
+
+**Honest limits**
+
+We don’t have every UIS SKU on the bench. **Other devices might share those numbers or use new ones.** The full write-up with tables lives in [**`AC_INFINITY_FIELDS.md`**](AC_INFINITY_FIELDS.md); treat it as **observed behavior**, not a guarantee from AC Infinity. If you discover new combinations, extending that doc helps everyone.
 
 ---
 
@@ -57,7 +93,7 @@ Open **http://localhost:8080** (or `http://<your-machine>:8080` from another dev
    - `PORT` — listen port inside the container (default `8080`).
    - `CACHE_SECONDS` — how long to cache the cloud snapshot (default `45`).
    - `LOG_LEVEL` — e.g. `INFO`, `DEBUG`.
-   - **Headless / no wizard:** set `ACDASH_USE_ENV_CREDENTIALS=1` and provide `ACINFINITY_EMAIL` + `ACINFINITY_PASSWORD` in the stack env; leave `/app/data` empty or omit the wizard file so env wins.
+   - **Headless / no wizard:** set `ACDASH_USE_ENV_CREDENTIALS=1` and provide `ACINFINITY_EMAIL` + `ACINFINITY_PASSWORD` in the stack env; leave `/app/data` empty or omit the wizard file if you want env to win.
 
 That’s enough to run it alongside the rest of your homelab and hit it from any browser on the network.
 
@@ -65,10 +101,10 @@ That’s enough to run it alongside the rest of your homelab and hit it from any
 
 ## What it is / isn’t
 
-- **Is:** read-only style dashboard (polls AC Infinity’s cloud API, shows normalized controllers/ports/sensors).
-- **Isn’t:** official AC Infinity software, Prometheus metrics, or a complete enum of every device type in the ecosystem.
+- **Is:** a **read-only** monitoring dashboard—it **displays** what the API returns; it doesn’t push setpoints or replace the official app for automation.
+- **Isn’t:** official AC Infinity software, a Pulse Grow competitor hardware-wise, a Prometheus exporter, or a complete map of every device type in the wild.
 
-Not affiliated with AC Infinity—just a fan of their hardware who wanted a big-screen tent view.
+Not affiliated with AC Infinity—just a project for a calm, big-screen environmental view without extra hardware in the room.
 
 ---
 
