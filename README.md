@@ -74,4 +74,6 @@ Not affiliated with AC Infinity—just a fan of their hardware who wanted a big-
 
 ## License
 
-If you fork or ship this, keep the credit to **acinfinity-exporter** and respect AC Infinity’s terms for API use. Add a `LICENSE` file here if you want something explicit for your fork.
+**MIT** — see [`LICENSE`](LICENSE).
+
+If you fork or ship this, keep the credit to **acinfinity-exporter** and respect AC Infinity’s terms for API use.
