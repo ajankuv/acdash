@@ -1,0 +1,474 @@
+{% extends "base.html" %}
+{% block content %}
+  <div id="dashboard-error">
+    {% if error %}
+      <div class="mb-6 rounded-lg border border-red-900/80 bg-red-950/50 px-4 py-3 text-sm text-red-200">
+        {{ error }}
+      </div>
+    {% endif %}
+  </div>
+
+  <div class="mb-8 flex flex-col gap-4 rounded-2xl border border-zinc-800/80 bg-zinc-900/40 p-4 shadow-lg shadow-black/20 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between">
+    <div class="flex flex-wrap items-center gap-3">
+      <label class="text-xs font-medium uppercase tracking-wider text-zinc-500" for="acdash-refresh">Refresh</label>
+      <select
+        id="acdash-refresh"
+        class="rounded-lg border border-zinc-700 bg-black/50 px-3 py-2 text-sm text-zinc-100 outline-none ring-emerald-500/0 transition focus:border-emerald-600/50 focus:ring-2 focus:ring-emerald-500/30"
+      >
+        <option value="1">Real time (1s)</option>
+        <option value="3">3 seconds</option>
+        <option value="5">5 seconds</option>
+        <option value="10">10 seconds</option>
+        <option value="30">30 seconds</option>
+        <option value="60">60 seconds</option>
+        <option value="0">Off</option>
+      </select>
+      <button
+        type="button"
+        id="acdash-refresh-now"
+        class="rounded-lg border border-zinc-600/80 bg-zinc-800/60 px-3 py-2 text-sm font-medium text-zinc-200 transition hover:border-zinc-500 hover:bg-zinc-800"
+      >
+        Refresh now
+      </button>
+    </div>
+    <div class="flex flex-wrap items-center gap-3">
+      <span class="text-xs font-medium uppercase tracking-wider text-zinc-500">Temperature</span>
+      <div class="inline-flex rounded-lg border border-zinc-700 bg-black/40 p-0.5 ring-1 ring-zinc-800/80" role="group" aria-label="Temperature unit">
+        <button
+          type="button"
+          id="acdash-unit-c"
+          class="acdash-unit-btn rounded-md px-3 py-1.5 text-xs font-semibold transition"
+          data-unit="c"
+        >
+          °C
+        </button>
+        <button
+          type="button"
+          id="acdash-unit-f"
+          class="acdash-unit-btn rounded-md px-3 py-1.5 text-xs font-semibold transition"
+          data-unit="f"
+        >
+          °F
+        </button>
+      </div>
+    </div>
+    <p class="w-full text-xs text-zinc-500 sm:w-auto">
+      Drag cards by the grip to reorder — layout is saved in this browser.
+    </p>
+  </div>
+
+  <p id="dashboard-empty" class="text-zinc-500 {% if controllers or error %}hidden{% endif %}">No controllers found.</p>
+
+  <div id="dashboard-cards" class="flex flex-wrap gap-6">
+    {% for c in controllers %}
+      {% include "partials/controller_card.html" %}
+    {% endfor %}
+  </div>
+
+  <details
+    id="acdash-debug-panel"
+    class="mt-12 rounded-2xl border border-amber-900/40 bg-amber-950/20 p-4 ring-1 ring-amber-900/30"
+  >
+    <summary class="cursor-pointer select-none text-sm font-medium text-amber-200/90">
+      API debug dump (copy for support)
+    </summary>
+    <div class="mt-4 space-y-3">
+      <p class="text-xs leading-relaxed text-zinc-500">
+        Loads <code class="text-zinc-400">devInfoListAll</code> (full response), acdash&rsquo;s normalized controller view, plus
+        <code class="text-zinc-400">getDevSetting</code> and <code class="text-zinc-400">getdevModeSettingList</code> for port
+        <code class="text-zinc-400">0</code> and every port listed on each controller. May take several seconds; includes
+        personal device data.
+      </p>
+      <div class="flex flex-wrap gap-2">
+        <button
+          type="button"
+          id="acdash-debug-load"
+          class="rounded-lg border border-amber-700/60 bg-amber-900/30 px-3 py-2 text-xs font-medium text-amber-100 transition hover:border-amber-600 hover:bg-amber-900/50"
+        >
+          Load full dump
+        </button>
+        <button
+          type="button"
+          id="acdash-debug-copy"
+          disabled
+          class="rounded-lg border border-zinc-600 bg-zinc-800/60 px-3 py-2 text-xs font-medium text-zinc-300 transition hover:border-zinc-500 disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          Copy JSON
+        </button>
+      </div>
+      <textarea
+        id="acdash-debug-json"
+        readonly
+        rows="14"
+        class="w-full resize-y rounded-lg border border-zinc-700 bg-black/60 px-3 py-2 font-mono text-[11px] leading-relaxed text-zinc-300 outline-none ring-emerald-500/0 focus:border-emerald-700/50 focus:ring-2 focus:ring-emerald-500/20"
+        spellcheck="false"
+        placeholder="Click &ldquo;Load full dump&rdquo;…"
+      ></textarea>
+    </div>
+  </details>
+{% endblock %}
+
+{% block extra_scripts %}
+  <script>
+    window.__ACDASH_CLIENT_URLS__ = {{ client_urls_json | safe }};
+  </script>
+  {# Sortable adds classes at runtime — Tailwind Play CDN will not generate those utilities; use plain CSS. #}
+  <style>
+    #dashboard-cards .acdash-ghost {
+      opacity: 0.45;
+    }
+    #dashboard-cards .acdash-chosen {
+      opacity: 0.95;
+    }
+    #dashboard-cards .acdash-drag {
+      cursor: grabbing;
+    }
+  </style>
+  <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.3/Sortable.min.js"></script>
+  <script>
+    (function () {
+      var STORAGE_REFRESH = "acdash_refresh_sec";
+      var STORAGE_UNIT = "acdash_temp_unit";
+      var STORAGE_ORDER = "acdash_card_order";
+
+      function parseC(el) {
+        var v = el.getAttribute("data-c");
+        if (v === null || v === "") return null;
+        var n = parseFloat(v, 10);
+        return isNaN(n) ? null : n;
+      }
+
+      function formatTemp(celsius, unit) {
+        if (celsius === null) return "—";
+        if (unit === "f") return (celsius * 9) / 5 + 32;
+        return celsius;
+      }
+
+      var unit = localStorage.getItem(STORAGE_UNIT) || "c";
+
+      function applyTempUnit(u) {
+        document.querySelectorAll(".js-temp").forEach(function (el) {
+          var c = parseC(el);
+          if (c === null) {
+            el.textContent = "—";
+            return;
+          }
+          if (u === "f") el.textContent = formatTemp(c, "f").toFixed(1) + "°F";
+          else el.textContent = formatTemp(c, "c").toFixed(1) + "°C";
+        });
+        document.querySelectorAll(".acdash-unit-btn").forEach(function (btn) {
+          var on = btn.getAttribute("data-unit") === u;
+          btn.classList.toggle("bg-emerald-600/90", on);
+          btn.classList.toggle("text-white", on);
+          btn.classList.toggle("shadow-sm", on);
+          btn.classList.toggle("text-zinc-400", !on);
+        });
+      }
+
+      function getOrder() {
+        try {
+          var o = JSON.parse(localStorage.getItem(STORAGE_ORDER) || "[]");
+          return Array.isArray(o) ? o : [];
+        } catch (e) {
+          return [];
+        }
+      }
+
+      function saveOrder(container) {
+        var ids = Array.prototype.map.call(container.children, function (el) {
+          return el.getAttribute("data-controller-id");
+        });
+        localStorage.setItem(STORAGE_ORDER, JSON.stringify(ids));
+      }
+
+      function applySavedOrder(container) {
+        var order = getOrder();
+        if (!order.length) return;
+        var byId = {};
+        Array.prototype.forEach.call(container.children, function (el) {
+          byId[el.getAttribute("data-controller-id")] = el;
+        });
+        var frag = document.createDocumentFragment();
+        order.forEach(function (id) {
+          if (byId[id]) {
+            frag.appendChild(byId[id]);
+            delete byId[id];
+          }
+        });
+        Object.keys(byId).forEach(function (k) {
+          frag.appendChild(byId[k]);
+        });
+        container.appendChild(frag);
+      }
+
+      var container = document.getElementById("dashboard-cards");
+      var errSlot = document.getElementById("dashboard-error");
+      var emptyEl = document.getElementById("dashboard-empty");
+      var sortableInstance = null;
+      var isDragging = false;
+      var pendingSnapshotData = null;
+      /* ./ keeps the path prefix when the URL has no trailing slash (e.g. /acdash vs /acdash/). */
+      function acdashUrl(rel) {
+        return new URL(rel, window.location.href.replace(/#.*$/, "")).href;
+      }
+
+      function destroySortable() {
+        try {
+          if (sortableInstance) {
+            sortableInstance.destroy();
+          }
+        } catch (e) {}
+        sortableInstance = null;
+      }
+
+      function initSortable() {
+        if (!container || typeof Sortable === "undefined") return;
+        destroySortable();
+        if (!container.querySelector(".controller-card")) return;
+        try {
+          applySavedOrder(container);
+          sortableInstance = Sortable.create(container, {
+            animation: 150,
+            draggable: ".controller-card",
+            handle: ".drag-handle",
+            ghostClass: "acdash-ghost",
+            chosenClass: "acdash-chosen",
+            dragClass: "acdash-drag",
+            easing: "cubic-bezier(0.25, 1, 0.5, 1)",
+            onStart: function () { isDragging = true; },
+            onEnd: function () {
+              isDragging = false;
+              saveOrder(container);
+              if (pendingSnapshotData) {
+                var d = pendingSnapshotData;
+                pendingSnapshotData = null;
+                applySnapshot(d);
+              }
+            },
+          });
+        } catch (e) {
+          sortableInstance = null;
+        }
+      }
+
+      function renderError(message) {
+        if (!errSlot) return;
+        errSlot.textContent = "";
+        if (!message) return;
+        var wrap = document.createElement("div");
+        wrap.className = "mb-6 rounded-lg border border-red-900/80 bg-red-950/50 px-4 py-3 text-sm text-red-200";
+        wrap.textContent = message;
+        errSlot.appendChild(wrap);
+      }
+
+      function applySnapshot(data) {
+        if (!data || !container) return;
+        if (typeof data.cards_html !== "string") return;
+        renderError(data.error == null ? "" : String(data.error));
+        if (emptyEl) {
+          if (data.show_empty) emptyEl.classList.remove("hidden");
+          else emptyEl.classList.add("hidden");
+        }
+        destroySortable();
+        container.innerHTML = data.cards_html;
+        initSortable();
+        applyTempUnit(unit);
+      }
+
+      function fetchSnapshot(url) {
+        return fetch(url, {
+          credentials: "same-origin",
+          cache: "no-store",
+          headers: { Accept: "application/json" },
+        });
+      }
+
+      function snapshotUrlCandidates() {
+        var cu = window.__ACDASH_CLIENT_URLS__ || {};
+        var urls = [];
+        if (cu.snapshots && cu.snapshots.length) {
+          for (var i = 0; i < cu.snapshots.length; i++) urls.push(cu.snapshots[i]);
+        }
+        urls.push(acdashUrl("./api/dashboard-snapshot"));
+        urls.push(acdashUrl("./dashboard-snapshot"));
+        var seen = {};
+        return urls.filter(function (u) {
+          if (!u || seen[u]) return false;
+          seen[u] = true;
+          return true;
+        });
+      }
+
+      function fetchSnapshotChain(urls, index) {
+        if (index >= urls.length) {
+          return Promise.resolve(null);
+        }
+        return fetchSnapshot(urls[index]).then(function (r) {
+          if (r.status === 401) return r;
+          if (r.status === 404) return fetchSnapshotChain(urls, index + 1);
+          return r;
+        });
+      }
+
+      function swapDashboard() {
+        var urls = snapshotUrlCandidates();
+        var cu = window.__ACDASH_CLIENT_URLS__ || {};
+        fetchSnapshotChain(urls, 0)
+          .then(function (r) {
+            if (!r) {
+              renderError(
+                "Refresh failed (404). Tried: " +
+                  urls.join(", ") +
+                  " — confirm reverse proxy forwards /api/dashboard-snapshot and redeploy."
+              );
+              return null;
+            }
+            if (r.status === 401) {
+              window.location.href = cu.setup || acdashUrl("./setup");
+              return null;
+            }
+            var ct = r.headers.get("content-type") || "";
+            if (!r.ok) {
+              renderError("Refresh failed (" + r.status + "). Check network or server logs.");
+              return null;
+            }
+            if (ct.indexOf("application/json") === -1) {
+              renderError("Refresh failed: server did not return JSON.");
+              return null;
+            }
+            return r.json();
+          })
+          .then(function (data) {
+            if (!data || !container) return;
+            if (isDragging) {
+              pendingSnapshotData = data;
+              return;
+            }
+            applySnapshot(data);
+          })
+          .catch(function (err) {
+            renderError("Refresh failed: " + (err && err.message ? err.message : "network error"));
+            if (typeof console !== "undefined" && console.error) {
+              console.error("acdash refresh failed", err);
+            }
+          });
+      }
+
+      window.addEventListener("pointercancel", function () {
+        isDragging = false;
+        if (pendingSnapshotData) {
+          var d = pendingSnapshotData;
+          pendingSnapshotData = null;
+          applySnapshot(d);
+        }
+      });
+
+      var refreshTimer = null;
+      function setRefreshInterval(sec) {
+        if (refreshTimer) clearInterval(refreshTimer);
+        refreshTimer = null;
+        var s = parseInt(sec, 10);
+        if (s > 0) refreshTimer = setInterval(swapDashboard, s * 1000);
+      }
+
+      var sel = document.getElementById("acdash-refresh");
+      var btnNow = document.getElementById("acdash-refresh-now");
+
+      initSortable();
+
+      var savedRefresh = localStorage.getItem(STORAGE_REFRESH);
+      if (savedRefresh === null) savedRefresh = "30";
+      if (sel) {
+        sel.value = savedRefresh;
+        sel.addEventListener("change", function () {
+          localStorage.setItem(STORAGE_REFRESH, sel.value);
+          setRefreshInterval(sel.value);
+        });
+      }
+      setRefreshInterval(savedRefresh);
+      setTimeout(swapDashboard, 400);
+
+      if (btnNow) btnNow.addEventListener("click", swapDashboard);
+
+      var btnC = document.getElementById("acdash-unit-c");
+      var btnF = document.getElementById("acdash-unit-f");
+      function setUnit(u) {
+        unit = u;
+        localStorage.setItem(STORAGE_UNIT, u);
+        applyTempUnit(u);
+      }
+      if (btnC) btnC.addEventListener("click", function () { setUnit("c"); });
+      if (btnF) btnF.addEventListener("click", function () { setUnit("f"); });
+      applyTempUnit(unit);
+
+      var debugTa = document.getElementById("acdash-debug-json");
+      var debugLoad = document.getElementById("acdash-debug-load");
+      var debugCopy = document.getElementById("acdash-debug-copy");
+      var lastDebugText = "";
+
+      function debugDumpUrls() {
+        var cu = window.__ACDASH_CLIENT_URLS__ || {};
+        var u = cu.debug_dump;
+        if (u) return [u];
+        return [acdashUrl("./api/debug/ac-infinity-dump")];
+      }
+
+      function copyDebugText() {
+        if (!lastDebugText || !debugTa) return;
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(lastDebugText).catch(function () {
+            debugTa.select();
+            document.execCommand("copy");
+          });
+        } else {
+          debugTa.select();
+          document.execCommand("copy");
+        }
+      }
+
+      if (debugLoad && debugTa) {
+        debugLoad.addEventListener("click", function () {
+          debugLoad.disabled = true;
+          if (debugCopy) debugCopy.disabled = true;
+          debugTa.value = "Loading…";
+          lastDebugText = "";
+          var url = debugDumpUrls()[0];
+          fetch(url, {
+            credentials: "same-origin",
+            cache: "no-store",
+            headers: { Accept: "application/json" },
+          })
+            .then(function (r) {
+              if (r.status === 401) {
+                var cu = window.__ACDASH_CLIENT_URLS__ || {};
+                window.location.href = cu.setup || acdashUrl("./setup");
+                return null;
+              }
+              if (!r.ok) {
+                return r.text().then(function (t) {
+                  throw new Error("HTTP " + r.status + " " + (t || "").slice(0, 200));
+                });
+              }
+              return r.json();
+            })
+            .then(function (data) {
+              debugLoad.disabled = false;
+              if (!data) return;
+              lastDebugText = JSON.stringify(data, null, 2);
+              debugTa.value = lastDebugText;
+              if (debugCopy) debugCopy.disabled = false;
+            })
+            .catch(function (err) {
+              debugLoad.disabled = false;
+              if (debugCopy) debugCopy.disabled = true;
+              lastDebugText = "";
+              debugTa.value = "Error: " + (err && err.message ? err.message : String(err));
+            });
+        });
+      }
+      if (debugCopy) {
+        debugCopy.addEventListener("click", copyDebugText);
+      }
+    })();
+  </script>
+{% endblock %}

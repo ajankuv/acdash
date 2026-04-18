@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="en" class="h-full">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>AC Dash</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+      tailwind.config = {
+        theme: {
+          extend: {
+            fontFamily: {
+              sans: ["ui-sans-serif", "system-ui", "sans-serif"],
+            },
+          },
+        },
+      };
+    </script>
+  </head>
+  <body class="h-full bg-black text-zinc-200 antialiased">
+    <div class="min-h-full bg-gradient-to-b from-zinc-950 to-black">
+      <header class="border-b border-zinc-800/80 bg-black/50 backdrop-blur">
+        <div class="mx-auto flex max-w-6xl items-center justify-between px-4 py-4 sm:px-6">
+          <div class="flex items-center gap-3">
+            <div class="h-9 w-9 rounded-xl bg-gradient-to-br from-emerald-500/30 to-emerald-600/10 ring-1 ring-emerald-500/40"></div>
+            <div>
+              <h1 class="text-base font-semibold tracking-tight text-zinc-100">AC Dash</h1>
+              <p class="text-xs text-zinc-500">AC Infinity · live tent view</p>
+            </div>
+          </div>
+        </div>
+      </header>
+
+      <main class="mx-auto max-w-6xl px-4 py-8 sm:px-6">
+        {% block content %}{% endblock %}
+      </main>
+
+      <footer class="border-t border-zinc-900 py-6 text-center text-xs text-zinc-600">
+        AC Dash — not affiliated with AC Infinity
+      </footer>
+    </div>
+    {% block extra_scripts %}{% endblock %}
+  </body>
+</html>

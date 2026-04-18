@@ -1,0 +1,111 @@
+<article
+  data-controller-id="{{ c.id }}"
+  class="controller-card box-border min-w-[280px] max-w-[28rem] shrink grow-0 basis-[22rem] rounded-2xl border border-zinc-800 bg-zinc-900/60 p-5 shadow-xl shadow-black/40 transition-shadow hover:shadow-emerald-950/20"
+>
+  <header class="drag-handle mb-4 flex cursor-grab touch-none select-none items-start justify-between gap-3 active:cursor-grabbing">
+    <div class="flex min-w-0 flex-1 items-start gap-2">
+      <span class="pointer-events-none mt-1 shrink-0 text-zinc-600" aria-hidden="true">
+        <svg class="h-5 w-5" fill="currentColor" viewBox="0 0 24 24"><path d="M8 6a2 2 0 1 1-4 0 2 2 0 0 1 4 0zm0 6a2 2 0 1 1-4 0 2 2 0 0 1 4 0zm0 6a2 2 0 1 1-4 0 2 2 0 0 1 4 0zm6-12a2 2 0 1 1-4 0 2 2 0 0 1 4 0zm0 6a2 2 0 1 1-4 0 2 2 0 0 1 4 0zm0 6a2 2 0 1 1-4 0 2 2 0 0 1 4 0z"/></svg>
+      </span>
+      <div class="min-w-0">
+        <h2 class="text-lg font-semibold tracking-tight text-zinc-100">{{ c.name }}</h2>
+        <p class="mt-0.5 text-xs text-zinc-500">ID {{ c.id }}</p>
+      </div>
+    </div>
+    {% if c.mode is not none %}
+      <span class="shrink-0 rounded-full bg-emerald-500/15 px-2.5 py-1 text-xs font-medium text-emerald-400 ring-1 ring-emerald-500/30">
+        Mode {{ c.mode }}
+      </span>
+    {% endif %}
+  </header>
+
+  <div class="mb-4 grid grid-cols-3 gap-2 text-center">
+    <div class="rounded-xl bg-black/40 px-2 py-3 ring-1 ring-zinc-800/80">
+      <div class="text-[10px] font-medium uppercase tracking-wider text-zinc-500">Temp</div>
+      <div class="mt-1 text-lg font-semibold tabular-nums text-zinc-100">
+        {% if c.temp_c is not none %}
+          <span class="js-temp" data-c="{{ '%.8f'|format(c.temp_c) }}">{{ "%.1f"|format(c.temp_c) }}°C</span>
+        {% else %}
+          —
+        {% endif %}
+      </div>
+    </div>
+    <div class="rounded-xl bg-black/40 px-2 py-3 ring-1 ring-zinc-800/80">
+      <div class="text-[10px] font-medium uppercase tracking-wider text-zinc-500">RH</div>
+      <div class="mt-1 text-lg font-semibold tabular-nums text-zinc-100">
+        {% if c.humidity_pct is not none %}{{ "%.2f"|format(c.humidity_pct) }}%{% else %}—{% endif %}
+      </div>
+    </div>
+    <div class="rounded-xl bg-black/40 px-2 py-3 ring-1 ring-zinc-800/80">
+      <div class="text-[10px] font-medium uppercase tracking-wider text-zinc-500">VPD</div>
+      <div class="mt-1 text-lg font-semibold tabular-nums text-zinc-100">
+        {% if c.get("vpd_kpa") is not none %}
+          {{ "%.2f"|format(c["vpd_kpa"]) }}
+          <span class="text-xs font-normal text-zinc-500">
+            kPa{% if c.get("vpd_is_estimate") %} <span class="italic text-zinc-600">(est.)</span>{% endif %}
+          </span>
+        {% else %}
+          —
+        {% endif %}
+      </div>
+    </div>
+  </div>
+
+  <div class="mb-4 space-y-1.5 border-t border-zinc-800/80 pt-4 text-xs text-zinc-500">
+    <div class="flex justify-between gap-2"><span>Wi‑Fi</span><span class="truncate text-zinc-400">{{ c.wifi }}</span></div>
+    <div class="flex justify-between gap-2"><span>Firmware</span><span class="text-zinc-400">{{ c.firmware }}</span></div>
+    <div class="flex justify-between gap-2"><span>Hardware</span><span class="text-zinc-400">{{ c.hardware }}</span></div>
+  </div>
+
+  {% if c.ports %}
+    <h3 class="mb-2 text-xs font-semibold uppercase tracking-wider text-zinc-500">Ports</h3>
+    <ul class="mb-4 space-y-2">
+      {% for p in c.ports %}
+        {% if p.port %}
+          <li class="flex items-center justify-between gap-2 rounded-lg bg-black/30 px-3 py-2 ring-1 ring-zinc-800/60">
+            <div class="min-w-0">
+              <div class="truncate text-sm text-zinc-200">{{ p.name }}</div>
+              <div class="text-[11px] text-zinc-500">
+                Port {{ p.port }}
+                {% if p.load_type is not none and p.load_type != 0 %}
+                  <span class="text-zinc-600"> · UIS loadType {{ p.load_type }}</span>
+                {% endif %}
+              </div>
+              {% if p.state is not none %}
+                <div class="text-[10px] text-zinc-600">Load {{ "on" if p.state else "off" }}</div>
+              {% endif %}
+            </div>
+            <div class="flex shrink-0 flex-col items-end gap-0.5 text-xs">
+              {% if p.online is not none %}
+                <span class="{% if p.online %}text-emerald-400{% else %}text-zinc-500{% endif %}">
+                  {{ "Online" if p.online else "Offline" }}
+                </span>
+              {% endif %}
+              {% if p.speed is not none %}
+                <span class="tabular-nums text-zinc-400">Spd {{ p.speed }}</span>
+              {% endif %}
+            </div>
+          </li>
+        {% endif %}
+      {% endfor %}
+    </ul>
+  {% endif %}
+
+  {% if c.sensors %}
+    <h3 class="mb-2 text-xs font-semibold uppercase tracking-wider text-zinc-500">Sensors</h3>
+    <div class="flex flex-wrap gap-2">
+      {% for s in c.sensors %}
+        <span class="inline-flex items-baseline gap-1 rounded-lg bg-zinc-800/80 px-2.5 py-1 text-xs ring-1 ring-zinc-700/80">
+          <span class="text-zinc-500">{{ s.label }}</span>
+          {% if s.is_temp and s.value is not none %}
+            <span class="js-temp font-medium tabular-nums text-zinc-200" data-c="{{ '%.8f'|format(s.value) }}">{{ "%.2f"|format(s.value) }}{{ s.suffix }}</span>
+          {% else %}
+            <span class="font-medium tabular-nums text-zinc-200">
+              {% if s.value is not none %}{{ "%.2f"|format(s.value) }}{% else %}—{% endif %}{{ s.suffix }}
+            </span>
+          {% endif %}
+        </span>
+      {% endfor %}
+    </div>
+  {% endif %}
+</article>

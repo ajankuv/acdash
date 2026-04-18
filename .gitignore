@@ -1,0 +1,16 @@
+.venv/
+__pycache__/
+*.py[cod]
+.Python
+.env
+
+# IDE / local tooling (not part of the published app)
+.cursor/
+
+# Local ops notes (optional for contributors)
+DASHBOARD.md
+
+# Dashboard “API debug dump” exports and other pastebacks — can contain account, device IDs, Wi‑Fi, etc.
+dumps/
+*ac-infinity*dump*.json
+*acdash*debug*.json
