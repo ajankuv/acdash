@@ -1,0 +1,20 @@
+# Portainer → Stacks → Web editor: set `image` to your GHCR image after the first workflow run.
+# Example: ghcr.io/myuser/acdash:latest
+# Replace BOTH parts of the path with your GitHub username/org and repo name (lowercase).
+
+services:
+  acdash:
+    image: ghcr.io/YOUR_GITHUB_USER/YOUR_REPO_NAME:latest
+    container_name: acdash
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      - PORT=8080
+      - PYTHONUNBUFFERED=1
+      - ENV_FILE_PATH=/app/data/.env
+    volumes:
+      - acdash_data:/app/data
+
+volumes:
+  acdash_data:

@@ -1,3 +1,5 @@
+.DS_Store
+
 .venv/
 __pycache__/
 *.py[cod]
@@ -9,6 +11,11 @@ __pycache__/
 
 # Local ops notes (optional for contributors)
 DASHBOARD.md
+
+# R&D tree (decompile, probes, secrets) — not published. Only RND/.gitignore is tracked
+# so collaborators know what to exclude if they keep a local RND/ directory.
+RND/*
+!RND/.gitignore
 
 # Dashboard “API debug dump” exports and other pastebacks — can contain account, device IDs, Wi‑Fi, etc.
 dumps/

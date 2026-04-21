@@ -1,0 +1,34 @@
+# RND — private / local research (parent repo ignores everything here except this file).
+# Copy this tree elsewhere or use a private mirror if you want RND in version control.
+
+# Credentials and local env
+.env
+.env.*
+!.env.example
+
+# Extracted APK, jadx, apktool, Ghidra outputs, hand notes
+work/
+generated/
+
+# Binaries and large artifacts
+*.apk
+*.aab
+*.dex
+*.jar
+*.zip
+
+# Python tooling under RND/
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# OS / editors
+.DS_Store
+.idea/
+.vscode/
+.cursor/
+
+# One-off dumps (can contain account, devIds, Wi‑Fi)
+dumps/
+*.log

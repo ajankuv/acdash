@@ -11,12 +11,13 @@ from typing import Any, Union
 from urllib.parse import urljoin, urlunparse
 
 from dotenv import dotenv_values
-from fastapi import FastAPI, Form, Request
+from fastapi import FastAPI, Form, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
 from app.client import ACInfinityClient
 from app.debug_bundle import collect_debug_bundle
+from app.history import fetch_history_for_chart
 from app.normalize import normalize_devices
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
@@ -178,11 +179,14 @@ def setup_post(
 
     if not ok:
         template = env.get_template("setup.html")
+        detail = (getattr(client, "last_auth_error", None) or "").strip()
+        err_msg = "Could not sign in to AC Infinity."
+        if detail:
+            err_msg += " " + detail
+        else:
+            err_msg += " Check email and password."
         return HTMLResponse(
-            template.render(
-                error="Could not sign in to AC Infinity. Check email and password.",
-                refresh_seconds=0,
-            ),
+            template.render(error=err_msg, refresh_seconds=0),
             status_code=400,
         )
 
@@ -237,12 +241,71 @@ def dashboard_snapshot() -> JSONResponse:
     cards_html = env.get_template("partials/cards_only.html").render(controllers=controllers)
     show_empty = not controllers and error is None
 
+    controllers_meta = [{"id": c["id"], "name": c["name"]} for c in controllers]
     return JSONResponse(
         {
             "error": error,
             "cards_html": cards_html,
             "show_empty": show_empty,
+            "controllers": controllers_meta,
         },
+        headers={"Cache-Control": "no-store, no-cache", "Pragma": "no-cache"},
+    )
+
+
+@app.get("/api/history-chart")
+def api_history_chart(
+    dev_id: str = Query("", alias="dev_id"),
+    hours: float = Query(24.0, ge=1.0, le=720.0),
+) -> JSONResponse:
+    """Paged ``log/dataPage`` history for Chart.js (dev_id must belong to the signed-in account)."""
+    if not credentials_configured():
+        return JSONResponse({"error": "Unauthorized"}, status_code=401)
+
+    dev_id = (dev_id or "").strip()
+    if not dev_id:
+        return JSONResponse({"error": "dev_id is required"}, status_code=400)
+
+    email, password = _get_credentials()
+    if not email or not password:
+        return JSONResponse({"error": "Unauthorized"}, status_code=401)
+
+    client = ACInfinityClient(email, password)
+    try:
+        raw = client.get_devices()
+        allowed = {str(d.get("devId")) for d in raw if d.get("devId")}
+        if dev_id not in allowed:
+            return JSONResponse({"error": "Controller not found on this account"}, status_code=404)
+
+        def fetch_page(
+            d: str,
+            time_end: int,
+            time_start: int,
+            page_size: int,
+            *,
+            order_direction: int = 1,
+        ) -> dict[str, Any]:
+            return (
+                client.history_data_page(
+                    d,
+                    time_end,
+                    time_start,
+                    page_size=page_size,
+                    order_direction=order_direction,
+                )
+                or {}
+            )
+
+        points, meta = fetch_history_for_chart(
+            history_page_fn=fetch_page,
+            dev_id=dev_id,
+            hours=float(hours),
+        )
+    finally:
+        client.close()
+
+    return JSONResponse(
+        {"points": points, "meta": meta},
         headers={"Cache-Control": "no-store, no-cache", "Pragma": "no-cache"},
     )
 
@@ -254,8 +317,10 @@ def dashboard(request: Request) -> Union[HTMLResponse, RedirectResponse]:
 
     controllers, error, _ = get_cached_controllers()
     template = env.get_template("dashboard.html")
+    controllers_meta = [{"id": c["id"], "name": c["name"]} for c in controllers]
     html = template.render(
         controllers=controllers,
+        controllers_json=json.dumps(controllers_meta),
         error=error,
         refresh_seconds=0,
         client_urls_json=json.dumps(_client_dashboard_urls(request)),

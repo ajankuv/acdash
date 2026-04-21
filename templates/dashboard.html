@@ -65,6 +65,134 @@
     {% endfor %}
   </div>
 
+  <section
+    id="acdash-history-section"
+    class="relative mt-14 overflow-hidden rounded-2xl border border-zinc-800/90 bg-gradient-to-b from-zinc-900/70 via-zinc-950/80 to-black/90 p-6 shadow-2xl shadow-emerald-950/10 ring-1 ring-emerald-900/20"
+  >
+    <style>
+      /* Chart status lines: classes are set from JS — Tailwind CDN may not see them; use plain CSS. */
+      #acdash-chart-status {
+        margin-top: 0.75rem;
+      }
+      #acdash-chart-status .acdash-chart-status-line {
+        margin: 0;
+        font-size: 0.75rem;
+        line-height: 1.625;
+        word-break: break-word;
+      }
+      #acdash-chart-status.tone-default .acdash-chart-status-line {
+        color: #71717a;
+      }
+      #acdash-chart-status.tone-muted .acdash-chart-status-line {
+        color: #a1a1aa;
+      }
+      #acdash-chart-status.tone-warn .acdash-chart-status-line {
+        color: rgba(253, 224, 71, 0.92);
+      }
+      #acdash-chart-status.tone-error .acdash-chart-status-line {
+        color: #fca5a5;
+      }
+    </style>
+    <div
+      class="pointer-events-none absolute -right-20 -top-20 h-64 w-64 rounded-full bg-emerald-500/10 blur-3xl"
+      aria-hidden="true"
+    ></div>
+    <div class="relative">
+      <div class="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+        <div>
+          <h2 class="text-lg font-semibold tracking-tight text-zinc-100">History &amp; trends</h2>
+          <p class="mt-1 max-w-2xl text-xs leading-relaxed text-zinc-500">
+            Pulled from AC Infinity <code class="rounded bg-black/50 px-1 py-0.5 text-zinc-400">log/dataPage</code> (cloud retention
+            varies). Choose a tent, range up to 7 days, and a chart style.
+          </p>
+        </div>
+      </div>
+
+      <div class="mt-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        <div class="space-y-1.5">
+          <label for="acdash-chart-dev" class="block text-[10px] font-semibold uppercase tracking-wider text-zinc-500"
+            >Tent / controller</label
+          >
+          <select
+            id="acdash-chart-dev"
+            class="w-full rounded-xl border border-zinc-700 bg-black/50 px-3 py-2.5 text-sm text-zinc-100 outline-none ring-emerald-500/0 transition focus:border-emerald-600/50 focus:ring-2 focus:ring-emerald-500/25"
+          >
+            <option value="">Select tent…</option>
+          </select>
+        </div>
+        <div class="space-y-1.5">
+          <label for="acdash-chart-hours" class="block text-[10px] font-semibold uppercase tracking-wider text-zinc-500"
+            >Time range</label
+          >
+          <select
+            id="acdash-chart-hours"
+            class="w-full rounded-xl border border-zinc-700 bg-black/50 px-3 py-2.5 text-sm text-zinc-100 outline-none focus:border-emerald-600/50 focus:ring-2 focus:ring-emerald-500/25"
+          >
+            <option value="6">Last 6 hours</option>
+            <option value="12">Last 12 hours</option>
+            <option value="24" selected>Last 24 hours</option>
+            <option value="48">Last 48 hours</option>
+            <option value="72">Last 72 hours</option>
+            <option value="168">Last 7 days</option>
+            <option value="720">Last 30 days</option>
+          </select>
+        </div>
+        <div class="space-y-1.5">
+          <label for="acdash-chart-type" class="block text-[10px] font-semibold uppercase tracking-wider text-zinc-500"
+            >Chart style</label
+          >
+          <select
+            id="acdash-chart-type"
+            class="w-full rounded-xl border border-zinc-700 bg-black/50 px-3 py-2.5 text-sm text-zinc-100 outline-none focus:border-emerald-600/50 focus:ring-2 focus:ring-emerald-500/25"
+          >
+            <option value="env">Environment (temp · RH · VPD)</option>
+            <option value="temp">Temperature only</option>
+            <option value="rh">Humidity only</option>
+            <option value="vpd">VPD only</option>
+            <option value="fan">Fan level</option>
+          </select>
+        </div>
+        <div class="flex items-end">
+          <button
+            type="button"
+            id="acdash-chart-load"
+            class="w-full rounded-xl border border-emerald-600/50 bg-emerald-600/20 px-4 py-2.5 text-sm font-semibold text-emerald-100 shadow-lg shadow-emerald-950/30 transition hover:border-emerald-500 hover:bg-emerald-600/35"
+          >
+            Load chart
+          </button>
+        </div>
+      </div>
+
+      <div id="acdash-chart-single-wrap" class="relative mt-4 h-[340px] w-full rounded-xl border border-zinc-800/80 bg-black/30 p-2">
+        <canvas id="acdash-chart-canvas" aria-label="History chart"></canvas>
+      </div>
+      <div
+        id="acdash-chart-triple-wrap"
+        class="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-3"
+        style="display: none"
+      >
+        <div class="rounded-xl border border-zinc-800/80 bg-black/30 p-2">
+          <p class="mb-1 px-1 text-[10px] font-medium uppercase tracking-wider text-emerald-400/90">Temperature</p>
+          <div class="relative h-[220px]"><canvas id="acdash-chart-c0"></canvas></div>
+        </div>
+        <div class="rounded-xl border border-zinc-800/80 bg-black/30 p-2">
+          <p class="mb-1 px-1 text-[10px] font-medium uppercase tracking-wider text-sky-400/90">Humidity</p>
+          <div class="relative h-[220px]"><canvas id="acdash-chart-c1"></canvas></div>
+        </div>
+        <div class="rounded-xl border border-zinc-800/80 bg-black/30 p-2">
+          <p class="mb-1 px-1 text-[10px] font-medium uppercase tracking-wider text-fuchsia-400/90">VPD</p>
+          <div class="relative h-[220px]"><canvas id="acdash-chart-c2"></canvas></div>
+        </div>
+      </div>
+
+      <div
+        id="acdash-chart-status"
+        class="flex min-h-[1.25rem] flex-col gap-1.5 max-w-full tone-default"
+        aria-live="polite"
+      ></div>
+    </div>
+  </section>
+
   <details
     id="acdash-debug-panel"
     class="mt-12 rounded-2xl border border-amber-900/40 bg-amber-950/20 p-4 ring-1 ring-amber-900/30"
@@ -109,8 +237,11 @@
 {% endblock %}
 
 {% block extra_scripts %}
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
   <script>
     window.__ACDASH_CLIENT_URLS__ = {{ client_urls_json | safe }};
+    window.__ACDASH_CONTROLLERS__ = {{ controllers_json | safe }};
   </script>
   {# Sortable adds classes at runtime — Tailwind Play CDN will not generate those utilities; use plain CSS. #}
   <style>
@@ -469,6 +600,408 @@
       if (debugCopy) {
         debugCopy.addEventListener("click", copyDebugText);
       }
+
+      function mergeControllerOptions(list) {
+        var sel = document.getElementById("acdash-chart-dev");
+        if (!sel || !Array.isArray(list)) return;
+        var keep = sel.value;
+        sel.innerHTML = "";
+        var ph = document.createElement("option");
+        ph.value = "";
+        ph.textContent = "Select tent…";
+        sel.appendChild(ph);
+        list.forEach(function (c) {
+          if (!c || !c.id) return;
+          var o = document.createElement("option");
+          o.value = c.id;
+          o.textContent = (c.name || "Controller") + " · " + c.id;
+          sel.appendChild(o);
+        });
+        if (keep) {
+          for (var i = 0; i < sel.options.length; i++) {
+            if (sel.options[i].value === keep) {
+              sel.value = keep;
+              break;
+            }
+          }
+        }
+      }
+
+      if (window.__ACDASH_CONTROLLERS__) {
+        mergeControllerOptions(window.__ACDASH_CONTROLLERS__);
+      }
+
+      var _origApply = applySnapshot;
+      applySnapshot = function (data) {
+        _origApply(data);
+        if (data && Array.isArray(data.controllers)) {
+          mergeControllerOptions(data.controllers);
+        }
+      };
+    })();
+  </script>
+  <script>
+    (function () {
+      if (typeof Chart === "undefined") return;
+
+      var chartSingle = null;
+      var chartTriple = [null, null, null];
+      var gridColor = "rgba(255,255,255,0.06)";
+      var tickColor = "#71717a";
+
+      function acdashUrl(rel) {
+        return new URL(rel, window.location.href.replace(/#.*$/, "")).href;
+      }
+
+      /** One line per <p> — colors from #acdash-chart-status scoped CSS (Tailwind skips JS-only classes). */
+      function setChartStatus(lines, variant) {
+        var el = document.getElementById("acdash-chart-status");
+        if (!el) return;
+        el.innerHTML = "";
+        var tone =
+          variant === "error" ? "error" : variant === "warn" ? "warn" : variant === "muted" ? "muted" : "default";
+        el.className = "flex min-h-[1.25rem] flex-col gap-1.5 max-w-full tone-" + tone;
+        (lines || []).forEach(function (s) {
+          var p = document.createElement("p");
+          p.className = "acdash-chart-status-line";
+          p.textContent = s;
+          el.appendChild(p);
+        });
+      }
+
+      function getTempUnit() {
+        return localStorage.getItem("acdash_temp_unit") || "c";
+      }
+
+      function tempDisplay(c) {
+        if (c == null || isNaN(c)) return null;
+        if (getTempUnit() === "f") return (c * 9) / 5 + 32;
+        return c;
+      }
+
+      function tempLabel() {
+        return getTempUnit() === "f" ? "°F" : "°C";
+      }
+
+      function destroyCharts() {
+        if (chartSingle) {
+          chartSingle.destroy();
+          chartSingle = null;
+        }
+        chartTriple.forEach(function (ch, i) {
+          if (ch) {
+            ch.destroy();
+            chartTriple[i] = null;
+          }
+        });
+      }
+
+      function baseTimeOptions(hoursRange) {
+        var h = parseFloat(hoursRange, 10);
+        if (isNaN(h) || h <= 0) h = 24;
+        var unit = "hour";
+        var displayFormats = { hour: "MMM d HH:mm", day: "MMM d" };
+        if (h > 72) {
+          unit = "day";
+        }
+        var maxTicks = h > 720 ? 8 : h > 168 ? 8 : h > 72 ? 10 : h > 48 ? 10 : 8;
+        return {
+          type: "time",
+          time: {
+            unit: unit,
+            tooltipFormat: "MMM d, yyyy HH:mm",
+            displayFormats: displayFormats,
+          },
+          grid: { color: gridColor, tickLength: 4 },
+          ticks: {
+            color: tickColor,
+            maxRotation: 0,
+            autoSkip: true,
+            maxTicksLimit: maxTicks,
+            font: { size: 10 },
+          },
+        };
+      }
+
+      function baseYOptions(label) {
+        return {
+          grid: { color: gridColor },
+          ticks: { color: tickColor },
+          title: { display: !!label, text: label || "", color: tickColor, font: { size: 11 } },
+        };
+      }
+
+      function commonOptions() {
+        return {
+          responsive: true,
+          maintainAspectRatio: false,
+          layout: {
+            padding: { top: 4, right: 8, bottom: 20, left: 4 },
+          },
+          interaction: { mode: "index", intersect: false },
+          plugins: {
+            legend: {
+              labels: { color: "#a1a1aa" },
+            },
+            tooltip: {
+              backgroundColor: "rgba(24,24,27,0.95)",
+              titleColor: "#e4e4e7",
+              bodyColor: "#d4d4d8",
+              borderColor: "rgba(63,63,70,0.8)",
+              borderWidth: 1,
+            },
+          },
+        };
+      }
+
+      function pointsToXY(points, key, transform) {
+        var out = [];
+        points.forEach(function (p) {
+          var y = p[key];
+          if (transform) y = transform(y);
+          if (y == null || isNaN(y)) return;
+          out.push({ x: p.t_ms, y: y });
+        });
+        return out;
+      }
+
+      function renderSingle(canvas, chartType, points, hoursRange) {
+        destroyCharts();
+        var wrapSingle = document.getElementById("acdash-chart-single-wrap");
+        var wrapTriple = document.getElementById("acdash-chart-triple-wrap");
+        if (wrapSingle) wrapSingle.style.display = "";
+        if (wrapTriple) wrapTriple.style.display = "none";
+
+        var ds = [];
+        if (chartType === "temp") {
+          ds.push({
+            label: "Temperature (" + tempLabel() + ")",
+            data: pointsToXY(points, "temp_c", tempDisplay),
+            borderColor: "#34d399",
+            backgroundColor: "rgba(52,211,153,0.12)",
+            fill: true,
+            tension: 0.25,
+            pointRadius: 0,
+            borderWidth: 2,
+          });
+        } else if (chartType === "rh") {
+          ds.push({
+            label: "Humidity %",
+            data: pointsToXY(points, "rh", null),
+            borderColor: "#38bdf8",
+            backgroundColor: "rgba(56,189,248,0.12)",
+            fill: true,
+            tension: 0.25,
+            pointRadius: 0,
+            borderWidth: 2,
+          });
+        } else if (chartType === "vpd") {
+          ds.push({
+            label: "VPD (kPa)",
+            data: pointsToXY(points, "vpd_kpa", null),
+            borderColor: "#e879f9",
+            backgroundColor: "rgba(232,121,249,0.1)",
+            fill: true,
+            tension: 0.25,
+            pointRadius: 0,
+            borderWidth: 2,
+          });
+        } else if (chartType === "fan") {
+          ds.push({
+            label: "Fan level",
+            data: pointsToXY(points, "fan", null),
+            borderColor: "#fbbf24",
+            backgroundColor: "rgba(251,191,36,0.1)",
+            fill: true,
+            tension: 0.2,
+            pointRadius: 0,
+            borderWidth: 2,
+          });
+        }
+
+        chartSingle = new Chart(canvas.getContext("2d"), {
+          type: "line",
+          data: { datasets: ds },
+          options: Object.assign({}, commonOptions(), {
+            scales: {
+              x: baseTimeOptions(hoursRange),
+              y: baseYOptions(chartType === "temp" ? tempLabel() : chartType === "rh" ? "%" : chartType === "vpd" ? "kPa" : "level"),
+            },
+          }),
+        });
+      }
+
+      function renderTriple(points, hoursRange) {
+        destroyCharts();
+        var wrapSingle = document.getElementById("acdash-chart-single-wrap");
+        var wrapTriple = document.getElementById("acdash-chart-triple-wrap");
+        if (wrapSingle) wrapSingle.style.display = "none";
+        if (wrapTriple) wrapTriple.style.display = "grid";
+
+        var configs = [
+          {
+            label: "Temperature (" + tempLabel() + ")",
+            key: "temp_c",
+            transform: tempDisplay,
+            color: "#34d399",
+            fill: "rgba(52,211,153,0.12)",
+            ylbl: tempLabel(),
+          },
+          {
+            label: "Humidity %",
+            key: "rh",
+            transform: null,
+            color: "#38bdf8",
+            fill: "rgba(56,189,248,0.12)",
+            ylbl: "%",
+          },
+          {
+            label: "VPD (kPa)",
+            key: "vpd_kpa",
+            transform: null,
+            color: "#e879f9",
+            fill: "rgba(232,121,249,0.1)",
+            ylbl: "kPa",
+          },
+        ];
+
+        configs.forEach(function (cfg, i) {
+          var el = document.getElementById("acdash-chart-c" + i);
+          if (!el) return;
+          chartTriple[i] = new Chart(el.getContext("2d"), {
+            type: "line",
+            data: {
+              datasets: [
+                {
+                  label: cfg.label,
+                  data: pointsToXY(points, cfg.key, cfg.transform),
+                  borderColor: cfg.color,
+                  backgroundColor: cfg.fill,
+                  fill: true,
+                  tension: 0.25,
+                  pointRadius: 0,
+                  borderWidth: 2,
+                },
+              ],
+            },
+            options: Object.assign({}, commonOptions(), {
+              scales: {
+                x: baseTimeOptions(hoursRange),
+                y: baseYOptions(cfg.ylbl),
+              },
+            }),
+          });
+        });
+      }
+
+      function loadHistory() {
+        var sel = document.getElementById("acdash-chart-dev");
+        var hoursEl = document.getElementById("acdash-chart-hours");
+        var typeEl = document.getElementById("acdash-chart-type");
+        var btn = document.getElementById("acdash-chart-load");
+        if (!sel || !hoursEl || !typeEl) return;
+
+        var devId = sel.value;
+        if (!devId) {
+          setChartStatus(["Select a tent to load history."], "warn");
+          return;
+        }
+
+        var hours = hoursEl.value;
+        var hoursNum = parseFloat(hours, 10) || 24;
+        var chartType = typeEl.value;
+        setChartStatus(["Loading…"], "muted");
+        if (btn) btn.disabled = true;
+
+        var url =
+          acdashUrl("./api/history-chart") +
+          "?dev_id=" +
+          encodeURIComponent(devId) +
+          "&hours=" +
+          encodeURIComponent(hours);
+
+        fetch(url, { credentials: "same-origin", cache: "no-store", headers: { Accept: "application/json" } })
+          .then(function (r) {
+            if (r.status === 401) {
+              window.location.href = (window.__ACDASH_CLIENT_URLS__ && window.__ACDASH_CLIENT_URLS__.setup) || acdashUrl("./setup");
+              return null;
+            }
+            return r.json().then(function (j) {
+              return { ok: r.ok, status: r.status, body: j };
+            });
+          })
+          .then(function (res) {
+            if (btn) btn.disabled = false;
+            if (!res) return;
+            if (!res.ok) {
+              setChartStatus([(res.body && res.body.error) || "Request failed (" + res.status + ")"], "error");
+              return;
+            }
+            var pts = res.body.points || [];
+            var meta = res.body.meta || {};
+            var spanH = meta.span_hours_rounded != null ? meta.span_hours_rounded : null;
+            var winH = meta.window_hours_rounded != null ? meta.window_hours_rounded : null;
+            var rawN = meta.points_unthinned != null ? meta.points_unthinned : null;
+            var lines = [pts.length + " points on chart"];
+            if (rawN != null && rawN !== pts.length) lines.push(rawN + " loaded before downsampling");
+            if (meta.pages_fetched != null) lines.push(meta.pages_fetched + " API page(s)");
+            if (meta.page_size != null) lines.push("page size " + meta.page_size + " (matches app polling)");
+            if (meta.fetch_chunks != null && meta.fetch_chunks > 1 && meta.chunk_hours != null)
+              lines.push(
+                meta.fetch_chunks + " time segment(s) (~" + meta.chunk_hours + " h each) per order pass"
+              );
+            else if (meta.fetch_chunks != null && meta.fetch_chunks > 1)
+              lines.push(meta.fetch_chunks + " time segment(s) per order pass");
+            if (meta.order_passes != null && meta.order_passes > 1)
+              lines.push(meta.order_passes + " orderDirection pass(es) merged (0+1)");
+            var apiTotal = meta.api_total_max != null ? meta.api_total_max : 0;
+            if (apiTotal > 0) lines.push("API total (max seen) " + apiTotal);
+            if (
+              winH != null &&
+              spanH != null &&
+              winH >= 72 &&
+              spanH < winH * 0.35 &&
+              apiTotal > 0 &&
+              apiTotal < 8000
+            ) {
+              lines.push(
+                "Cloud row budget looks modest for this window (API total≈" +
+                  apiTotal +
+                  "); short span may be retention/sampling on AC Infinity servers."
+              );
+            }
+            if (winH != null && winH > 0) lines.push("Requested window ~" + winH + " h");
+            if (spanH != null && spanH > 0) lines.push("Data time span ~" + spanH + " h (first → last point)");
+            if (meta.valid_from) lines.push("cloud validFrom " + meta.valid_from);
+            if (pts.length === 0) {
+              lines.push("No rows in this window — try a shorter range.");
+            }
+            setChartStatus(lines, pts.length === 0 ? "warn" : "default");
+            if (pts.length === 0) {
+              destroyCharts();
+              return;
+            }
+            if (chartType === "env") {
+              renderTriple(pts, hoursNum);
+            } else {
+              var canvas = document.getElementById("acdash-chart-canvas");
+              if (canvas) renderSingle(canvas, chartType, pts, hoursNum);
+            }
+          })
+          .catch(function (err) {
+            if (btn) btn.disabled = false;
+            setChartStatus(["Error: " + (err && err.message ? err.message : "network")], "error");
+          });
+      }
+
+      var btnLoad = document.getElementById("acdash-chart-load");
+      if (btnLoad) btnLoad.addEventListener("click", loadHistory);
+
+      window.addEventListener("storage", function (e) {
+        if (e.key === "acdash_temp_unit") {
+          /* re-load if we already have data — optional; user can click Load again */
+        }
+      });
     })();
   </script>
 {% endblock %}

@@ -30,6 +30,8 @@ AC Dash needs your **AC Infinity cloud email and password** (the same ones as th
 - Set **`ACDASH_USE_ENV_CREDENTIALS=1`** and provide **`ACINFINITY_EMAIL`** and **`ACINFINITY_PASSWORD`** in the container environment.
 - The wizard is skipped when those are present (and you’re not relying on a conflicting saved file—see `app/main.py` for the exact precedence).
 
+**Login transport:** acdash tries **form-body** login first (same as early releases and many community clients), then **query-string** login with **`fcmToken=Android_…`** like the Android Retrofit client—so either server behavior still works. To try query first instead: **`ACINFINITY_LOGIN_TRANSPORT=query`**. Optional: **`ACINFINITY_FCM_TOKEN`** (suffix after `Android_` or full `Android_…` string) for the query-style call.
+
 **Security hygiene:** don’t commit `.env`, don’t paste **debug JSON dumps** into public issues (they can include account fields, device IDs, Wi‑Fi names, etc.). This repo’s `.gitignore` is set up to steer clear of those.
 
 ---
@@ -84,9 +86,26 @@ Open **http://localhost:8080** (or `http://<your-machine>:8080` from another dev
 
 ---
 
+## Pre-built images (GitHub → GHCR)
+
+The repo includes **GitHub Actions** (`.github/workflows/release-docker.yml`) that push to **GitHub Container Registry**:
+
+| Event | Image tags (examples) |
+|--------|------------------------|
+| Push to **`main`** | `ghcr.io/<owner>/<repo>:latest` and a short **SHA** tag |
+| Push git tag **`v1.2.3`** | `ghcr.io/<owner>/<repo>:1.2.3` (semver) + a **GitHub Release** with notes |
+
+**One-time GitHub setup:** **Settings → Actions → General → Workflow permissions** → **Read and write** (needed to push packages and create releases).
+
+**Pulling the image:** GHCR is **not** the same URL as `github.com/releases` assets—the container lives at **`ghcr.io`**. If the package is **private**, add **Portainer → Registries → ghcr.io** with a GitHub PAT (`read:packages`), or set the package to **Public** under the repo’s **Packages** settings.
+
+**Portainer:** use **`docker-compose.yml`** in this repo: replace `YOUR_GITHUB_USER` / `YOUR_REPO_NAME` in the `image:` line with your real GitHub path (same as in the browser URL, usually lowercase). After a green workflow run, **Stacks → Pull and redeploy** to update when you push new **`main`** or change the tag.
+
+---
+
 ## Deploy with Portainer (or similar)
 
-1. **Image:** build from this repo’s `Dockerfile`, or use your registry image if you push one.
+1. **Image:** use **`ghcr.io/...`** from the workflow above, build from this repo’s `Dockerfile`, or use another registry.
 2. **Port mapping:** container **`8080`** → host port of your choice (e.g. `8080`).
 3. **Volume:** bind mount or named volume **`/app/data`** so credentials survive container recreate.
 4. **Environment (optional):**
