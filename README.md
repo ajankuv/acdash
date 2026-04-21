@@ -6,7 +6,7 @@
 > docker pull ghcr.io/ajankuv/acdash:latest
 > ```
 >
-> [**All image tags**](https://github.com/ajankuv/acdash/pkgs/container/acdash) · [Pre-built images](#pre-built-images-github--ghcr) & Portainer below.
+> [**All image tags**](https://github.com/ajankuv/acdash/pkgs/container/acdash) · [Portainer / compose](#deploy-with-portainer-or-similar) below.
 
 A **read-only** web dashboard for **AC Infinity** UIS controllers. It pulls the same live picture you get in the official app—**temperature**, **humidity**, **VPD**, and what’s happening on each **port**—and puts it in a browser tab on your computer or any device on your LAN.
 
@@ -94,26 +94,9 @@ Open **http://localhost:8080** (or `http://<your-machine>:8080` from another dev
 
 ---
 
-## Pre-built images (GitHub → GHCR)
-
-The repo includes **GitHub Actions** (`.github/workflows/release-docker.yml`) that push to **GitHub Container Registry**:
-
-| Event | Image tags (examples) |
-|--------|------------------------|
-| Push to **`main`** | `ghcr.io/<owner>/<repo>:latest` and a short **SHA** tag |
-| Push git tag **`v1.2.3`** | `ghcr.io/<owner>/<repo>:1.2.3` (semver) + a **GitHub Release** with notes |
-
-**One-time GitHub setup:** **Settings → Actions → General → Workflow permissions** → **Read and write** (needed to push packages and create releases).
-
-**Pulling the image:** GHCR is **not** the same URL as `github.com/releases` assets—the container lives at **`ghcr.io`**. If the package is **private**, add **Portainer → Registries → ghcr.io** with a GitHub PAT (`read:packages`), or set the package to **Public** under the repo’s **Packages** settings.
-
-**Portainer:** use **`docker-compose.yml`** in this repo: replace `YOUR_GITHUB_USER` / `YOUR_REPO_NAME` in the `image:` line with your real GitHub path (same as in the browser URL, usually lowercase). After a green workflow run, **Stacks → Pull and redeploy** to update when you push new **`main`** or change the tag.
-
----
-
 ## Deploy with Portainer (or similar)
 
-1. **Image:** use **`ghcr.io/...`** from the workflow above, build from this repo’s `Dockerfile`, or use another registry.
+1. **Image:** **`ghcr.io/ajankuv/acdash:latest`** ([package page](https://github.com/ajankuv/acdash/pkgs/container/acdash)) — or use **`docker-compose.yml`** in this repo as a stack. To update: **Pull and redeploy** the stack in Portainer. You can also **`docker build`** from this repo’s `Dockerfile` if you prefer a local image.
 2. **Port mapping:** container **`8080`** → host port of your choice (e.g. `8080`).
 3. **Volume:** bind mount or named volume **`/app/data`** so credentials survive container recreate.
 4. **Environment (optional):**

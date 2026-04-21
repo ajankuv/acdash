@@ -1,10 +1,8 @@
-# Portainer → Stacks → Web editor: set `image` to your GHCR image after the first workflow run.
-# Example: ghcr.io/myuser/acdash:latest
-# Replace BOTH parts of the path with your GitHub username/org and repo name (lowercase).
+# Portainer → Stacks → paste as Web editor, or: docker compose up -d
 
 services:
   acdash:
-    image: ghcr.io/YOUR_GITHUB_USER/YOUR_REPO_NAME:latest
+    image: ghcr.io/ajankuv/acdash:latest
     container_name: acdash
     restart: unless-stopped
     ports:
