@@ -1,5 +1,13 @@
 # AC Dash
 
+> **Docker (recommended)** — pull the latest image from GitHub Container Registry:
+>
+> ```bash
+> docker pull ghcr.io/ajankuv/acdash:latest
+> ```
+>
+> [**All image tags**](https://github.com/ajankuv/acdash/pkgs/container/acdash) · [Pre-built images](#pre-built-images-github--ghcr) & Portainer below.
+
 A **read-only** web dashboard for **AC Infinity** UIS controllers. It pulls the same live picture you get in the official app—**temperature**, **humidity**, **VPD**, and what’s happening on each **port**—and puts it in a browser tab on your computer or any device on your LAN.
 
 The goal isn’t to replace the AC Infinity app for programming; it’s to **monitor** the environment you’re already controlling with their hardware. Think of the kind of at-a-glance grow-room view products like **Pulse Grow** offer, except here you’re not adding another sensor hub—you’re **reusing the controller and cloud data you already have**.
