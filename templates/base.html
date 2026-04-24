@@ -16,6 +16,23 @@
         },
       };
     </script>
+    <style>
+      :fullscreen header,
+      :fullscreen footer,
+      :fullscreen #acdash-debug-panel { display: none !important; }
+      :fullscreen main {
+        max-width: 100%;
+        padding: 1.25rem 1.5rem;
+      }
+      /* Safari */
+      :-webkit-full-screen header,
+      :-webkit-full-screen footer,
+      :-webkit-full-screen #acdash-debug-panel { display: none !important; }
+      :-webkit-full-screen main {
+        max-width: 100%;
+        padding: 1.25rem 1.5rem;
+      }
+    </style>
   </head>
   <body class="h-full bg-black text-zinc-200 antialiased">
     <div class="min-h-full bg-gradient-to-b from-zinc-950 to-black">
@@ -28,6 +45,20 @@
               <p class="text-xs text-zinc-500">AC Infinity · live tent view</p>
             </div>
           </div>
+          <button
+            id="acdash-fullscreen-btn"
+            type="button"
+            title="Fullscreen"
+            class="rounded-lg p-1.5 text-zinc-500 transition hover:bg-zinc-800 hover:text-zinc-300"
+            aria-label="Toggle fullscreen"
+          >
+            <svg id="acdash-fs-expand" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="h-5 w-5">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M3.75 3.75v4.5m0-4.5h4.5m-4.5 0L9 9M3.75 20.25v-4.5m0 4.5h4.5m-4.5 0L9 15M20.25 3.75h-4.5m4.5 0v4.5m0-4.5L15 9m5.25 11.25h-4.5m4.5 0v-4.5m0 4.5L15 15" />
+            </svg>
+            <svg id="acdash-fs-compress" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="h-5 w-5" style="display:none">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M9 9V4.5M9 9H4.5M9 9L3.75 3.75M9 15v4.5M9 15H4.5M9 15l-5.25 5.25M15 9h4.5M15 9V4.5M15 9l5.25-5.25M15 15h4.5M15 15v4.5m0-4.5l5.25 5.25" />
+            </svg>
+          </button>
         </div>
       </header>
 
@@ -40,5 +71,31 @@
       </footer>
     </div>
     {% block extra_scripts %}{% endblock %}
+    <script>
+      (function () {
+        var btn = document.getElementById("acdash-fullscreen-btn");
+        var iconExpand = document.getElementById("acdash-fs-expand");
+        var iconCompress = document.getElementById("acdash-fs-compress");
+        if (!btn || !document.documentElement.requestFullscreen) {
+          if (btn) btn.style.display = "none";
+          return;
+        }
+        function updateIcon(isFs) {
+          iconExpand.style.display = isFs ? "none" : "";
+          iconCompress.style.display = isFs ? "" : "none";
+          btn.title = isFs ? "Exit fullscreen" : "Fullscreen";
+        }
+        btn.addEventListener("click", function () {
+          if (!document.fullscreenElement) {
+            document.documentElement.requestFullscreen();
+          } else {
+            document.exitFullscreen();
+          }
+        });
+        document.addEventListener("fullscreenchange", function () {
+          updateIcon(!!document.fullscreenElement);
+        });
+      })();
+    </script>
   </body>
 </html>
