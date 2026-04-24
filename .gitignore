@@ -8,6 +8,7 @@ __pycache__/
 
 # IDE / local tooling (not part of the published app)
 .cursor/
+.claude/
 
 # Local ops notes (optional for contributors)
 DASHBOARD.md

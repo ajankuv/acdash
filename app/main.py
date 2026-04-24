@@ -39,6 +39,20 @@ _cache: dict[str, object] = {
     "error": None,
 }
 
+_HISTORY_CACHE_TTL = float(os.getenv("HISTORY_CACHE_SECONDS", "300"))
+_history_cache: dict[tuple[str, int], dict[str, Any]] = {}
+
+
+def _get_history_cache(dev_id: str, hours: float) -> dict[str, Any] | None:
+    entry = _history_cache.get((dev_id, round(hours)))
+    if entry and (time.monotonic() - entry["at"]) < _HISTORY_CACHE_TTL:
+        return entry["data"]
+    return None
+
+
+def _set_history_cache(dev_id: str, hours: float, data: dict[str, Any]) -> None:
+    _history_cache[(dev_id, round(hours))] = {"at": time.monotonic(), "data": data}
+
 app = FastAPI(title="AC Dash", version="0.1.0")
 
 
@@ -119,13 +133,20 @@ def _fetch_controllers() -> tuple[list[dict], str | None]:
     client = ACInfinityClient(email, password)
     try:
         raw = client.get_devices()
+    except Exception as exc:
+        logger.error("Failed to fetch devices from AC Infinity: %s", exc, exc_info=True)
+        return [], f"Could not reach AC Infinity ({type(exc).__name__})."
     finally:
         client.close()
 
     if not raw:
         return [], "No data from AC Infinity (check credentials or API availability)."
 
-    return normalize_devices(raw), None
+    try:
+        return normalize_devices(raw), None
+    except Exception as exc:
+        logger.error("Failed to normalize device data: %s", exc, exc_info=True)
+        return [], "Error processing device data."
 
 
 def get_cached_controllers() -> tuple[list[dict], str | None, float]:
@@ -151,7 +172,7 @@ def setup_get() -> Union[HTMLResponse, RedirectResponse]:
     if credentials_configured():
         return RedirectResponse("/", status_code=302)
     template = env.get_template("setup.html")
-    return HTMLResponse(template.render(error=None, refresh_seconds=0))
+    return HTMLResponse(template.render(error=None))
 
 
 @app.post("/setup", response_class=HTMLResponse, response_model=None)
@@ -167,7 +188,7 @@ def setup_post(
     if not email or not password:
         template = env.get_template("setup.html")
         return HTMLResponse(
-            template.render(error="Email and password are required.", refresh_seconds=0),
+            template.render(error="Email and password are required."),
             status_code=400,
         )
 
@@ -186,7 +207,7 @@ def setup_post(
         else:
             err_msg += " Check email and password."
         return HTMLResponse(
-            template.render(error=err_msg, refresh_seconds=0),
+            template.render(error=err_msg),
             status_code=400,
         )
 
@@ -266,6 +287,11 @@ def api_history_chart(
     if not dev_id:
         return JSONResponse({"error": "dev_id is required"}, status_code=400)
 
+    cached = _get_history_cache(dev_id, hours)
+    if cached is not None:
+        logger.debug("History cache hit: dev_id=%s hours=%s", dev_id, hours)
+        return JSONResponse(cached, headers={"Cache-Control": "no-store, no-cache", "Pragma": "no-cache"})
+
     email, password = _get_credentials()
     if not email or not password:
         return JSONResponse({"error": "Unauthorized"}, status_code=401)
@@ -304,10 +330,9 @@ def api_history_chart(
     finally:
         client.close()
 
-    return JSONResponse(
-        {"points": points, "meta": meta},
-        headers={"Cache-Control": "no-store, no-cache", "Pragma": "no-cache"},
-    )
+    result = {"points": points, "meta": meta}
+    _set_history_cache(dev_id, hours, result)
+    return JSONResponse(result, headers={"Cache-Control": "no-store, no-cache", "Pragma": "no-cache"})
 
 
 @app.get("/", response_class=HTMLResponse, response_model=None)
@@ -322,7 +347,6 @@ def dashboard(request: Request) -> Union[HTMLResponse, RedirectResponse]:
         controllers=controllers,
         controllers_json=json.dumps(controllers_meta),
         error=error,
-        refresh_seconds=0,
         client_urls_json=json.dumps(_client_dashboard_urls(request)),
     )
     return HTMLResponse(html)

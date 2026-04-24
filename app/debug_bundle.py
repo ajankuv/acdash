@@ -9,8 +9,9 @@ from app.client import ACInfinityClient
 from app.normalize import normalize_devices
 
 
-def collect_debug_bundle(client: ACInfinityClient) -> dict[str, Any]:
+def collect_debug_bundle(client: ACInfinityClient, timeout_secs: float = 90.0) -> dict[str, Any]:
     """Fetch devInfoListAll (full body) plus per-port getDevSetting and getdevModeSettingList."""
+    deadline = time.monotonic() + timeout_secs
     bundle: dict[str, Any] = {
         "acdash": {
             "bundle": "ac-infinity-debug-v1",
@@ -66,6 +67,11 @@ def collect_debug_bundle(client: ACInfinityClient) -> dict[str, Any]:
 
         ports_out: dict[str, Any] = {}
         for port in sorted(port_nums):
+            if time.monotonic() > deadline:
+                bundle["collection_errors"].append(
+                    {"where": "timeout", "detail": f"bundle collection exceeded {timeout_secs}s limit"}
+                )
+                return bundle
             pk = str(port)
             mode_body = client.get_dev_mode_setting_list(dev_id, port)
             setting_body = client.get_dev_setting(dev_id, port)

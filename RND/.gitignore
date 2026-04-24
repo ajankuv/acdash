@@ -4,7 +4,6 @@
 # Credentials and local env
 .env
 .env.*
-!.env.example
 
 # Extracted APK, jadx, apktool, Ghidra outputs, hand notes
 work/
