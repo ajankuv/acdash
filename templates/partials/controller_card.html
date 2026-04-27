@@ -24,7 +24,7 @@
       <div class="text-[10px] font-medium uppercase tracking-wider text-zinc-500">Temp</div>
       <div class="mt-1 text-lg font-semibold tabular-nums text-zinc-100">
         {% if c.temp_c is not none %}
-          <span class="js-temp" data-c="{{ '%.8f'|format(c.temp_c) }}">{{ "%.1f"|format(c.temp_c) }}°C</span>
+          <span class="js-temp" data-c="{{ '%.8f'|format(c.temp_c) }}">{{ "%.1f"|format(c.temp_c) }}°C</span>{% if c.temp_trend is not none %}<span class="ml-0.5 text-xs font-normal text-zinc-500">{% if c.temp_trend == 1 %}↑{% elif c.temp_trend == 2 %}↓{% else %}→{% endif %}</span>{% endif %}
         {% else %}
           —
         {% endif %}
@@ -33,7 +33,7 @@
     <div class="rounded-xl bg-black/40 px-2 py-3 ring-1 ring-zinc-800/80">
       <div class="text-[10px] font-medium uppercase tracking-wider text-zinc-500">RH</div>
       <div class="mt-1 text-lg font-semibold tabular-nums text-zinc-100">
-        {% if c.humidity_pct is not none %}{{ "%.2f"|format(c.humidity_pct) }}%{% else %}—{% endif %}
+        {% if c.humidity_pct is not none %}{{ "%.2f"|format(c.humidity_pct) }}%{% if c.humidity_trend is not none %}<span class="ml-0.5 text-xs font-normal text-zinc-500">{% if c.humidity_trend == 1 %}↑{% elif c.humidity_trend == 2 %}↓{% else %}→{% endif %}</span>{% endif %}{% else %}—{% endif %}
       </div>
     </div>
     <div class="rounded-xl bg-black/40 px-2 py-3 ring-1 ring-zinc-800/80">
@@ -82,7 +82,12 @@
                 </span>
               {% endif %}
               {% if p.speed is not none %}
-                <span class="tabular-nums text-zinc-400">Spd {{ p.speed }}</span>
+                <div class="flex items-center gap-[2px]" title="Speed {{ p.speed }}/10">
+                  {% for i in range(10) %}
+                    <span class="h-2 w-1.5 rounded-sm {% if i < p.speed %}bg-emerald-500{% else %}bg-zinc-700{% endif %}"></span>
+                  {% endfor %}
+                  <span class="ml-1 text-[10px] tabular-nums text-zinc-500">{{ p.speed }}</span>
+                </div>
               {% endif %}
             </div>
           </li>

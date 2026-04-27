@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import json
 import logging
 import os
 import time
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Union
 from urllib.parse import urljoin, urlunparse
@@ -15,9 +18,11 @@ from fastapi import FastAPI, Form, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
+from app import storage
 from app.client import ACInfinityClient
+from app.collector import COLLECTOR_INTERVAL, collector_loop
 from app.debug_bundle import collect_debug_bundle
-from app.history import fetch_history_for_chart
+from app.history import fetch_history_for_chart, thin_points
 from app.normalize import normalize_devices
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
@@ -53,7 +58,23 @@ def _get_history_cache(dev_id: str, hours: float) -> dict[str, Any] | None:
 def _set_history_cache(dev_id: str, hours: float, data: dict[str, Any]) -> None:
     _history_cache[(dev_id, round(hours))] = {"at": time.monotonic(), "data": data}
 
-app = FastAPI(title="AC Dash", version="0.1.0")
+
+def _get_controllers_for_collector() -> list[dict]:
+    controllers, _, _ = get_cached_controllers()
+    return controllers
+
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):  # noqa: RUF029
+    storage.init_db()
+    task = asyncio.create_task(collector_loop(_get_controllers_for_collector))
+    yield
+    task.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await task
+
+
+app = FastAPI(title="AC Dash", version="0.1.0", lifespan=lifespan)
 
 
 def _client_dashboard_urls(request: Request) -> dict[str, Any]:
@@ -291,6 +312,30 @@ def api_history_chart(
     if cached is not None:
         logger.debug("History cache hit: dev_id=%s hours=%s", dev_id, hours)
         return JSONResponse(cached, headers={"Cache-Control": "no-store, no-cache", "Pragma": "no-cache"})
+
+    # SQLite-first: serve from local DB when we have adequate coverage
+    now_ts = int(time.time())
+    start_ts = now_ts - int(hours * 3600)
+    local_count = storage.count_readings(dev_id, start_ts, now_ts)
+    expected = (hours * 3600) / max(COLLECTOR_INTERVAL, 1)
+    if local_count >= max(10, int(expected * 0.4)):
+        local_points = storage.query_readings(dev_id, start_ts, now_ts)
+        thinned = thin_points(local_points, 1200)
+        span_secs = (thinned[-1]["t"] - thinned[0]["t"]) if len(thinned) >= 2 else 0
+        local_meta = {
+            "source": "local",
+            "points": len(thinned),
+            "points_unthinned": local_count,
+            "hours_requested": hours,
+            "span_hours_rounded": round(span_secs / 3600, 1),
+            "window_hours_rounded": round(hours, 1),
+            "pages_fetched": 0,
+            "api_total_max": 0,
+        }
+        result = {"points": thinned, "meta": local_meta}
+        _set_history_cache(dev_id, hours, result)
+        logger.debug("History served from local DB: dev_id=%s count=%d", dev_id, local_count)
+        return JSONResponse(result, headers={"Cache-Control": "no-store, no-cache", "Pragma": "no-cache"})
 
     email, password = _get_credentials()
     if not email or not password:

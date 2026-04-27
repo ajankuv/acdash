@@ -12,7 +12,7 @@ A **read-only** web dashboard for **AC Infinity** UIS controllers. It pulls the 
 
 The goal isn’t to replace the AC Infinity app for programming; it’s to **monitor** the environment you’re already controlling with their hardware. Think of the kind of at-a-glance grow-room view products like **Pulse Grow** offer, except here you’re not adding another sensor hub—you’re **reusing the controller and cloud data you already have**.
 
-I **vibe-coded** this for my own use: I kept opening the phone app to sanity-check heat and VPD. I wanted that same snapshot on a big screen, running in **Docker**, easy to manage in **Portainer**, and reachable from other machines on the network without another login flow every time. The UI uses **Tailwind** with a **dark theme** and is deliberately **in the spirit of AC Infinity’s app** (cards, hierarchy, calm greens)—not a pixel-perfect copy, but familiar enough that it feels like the same ecosystem.
+I **vibe-coded** this for my own use: I kept opening my phone to check on the winter veggie garden I keep with my daughter. I wanted that same snapshot on a big screen, running in **Docker**, easy to manage in **Portainer**, and reachable from other machines on the network without another login flow every time. The UI uses **Tailwind** with a **dark theme** and is deliberately **in the spirit of AC Infinity’s app** (cards, hierarchy, calm greens)—not a pixel-perfect copy, but familiar enough that it feels like the same ecosystem.
 
 ---
 
@@ -104,8 +104,23 @@ Open **http://localhost:8080** (or `http://<your-machine>:8080` from another dev
    - `CACHE_SECONDS` — how long to cache the cloud snapshot (default `45`).
    - `LOG_LEVEL` — e.g. `INFO`, `DEBUG`.
    - **Headless / no wizard:** set `ACDASH_USE_ENV_CREDENTIALS=1` and provide `ACINFINITY_EMAIL` + `ACINFINITY_PASSWORD` in the stack env; leave `/app/data` empty or omit the wizard file if you want env to win.
+   - `COLLECTOR_INTERVAL_SECONDS` — how often (in seconds) to write a sensor reading to the local history DB (default `60`).
+   - `HISTORY_DB_PATH` — path inside the container for the SQLite history file (default `/app/data/history.db`).
+   - `HISTORY_CACHE_SECONDS` — how long to cache history chart responses in memory (default `300`).
 
 That’s enough to run it alongside the rest of your homelab and hit it from any browser on the network.
+
+---
+
+## Persistent local history (SQLite)
+
+AC Infinity’s cloud API only keeps about **30 days of history**. Once a reading falls off that window it’s gone—there’s no way to pull it back.
+
+To get around this, AC Dash runs a **background collector** that writes one reading per controller to a local **SQLite database** every 60 seconds (configurable). The database lives at `/app/data/history.db` inside the container, which is the same volume you’re already mounting for credentials, so it survives container recreates automatically.
+
+When you load a history chart, AC Dash checks the local database first. If it has enough coverage for the requested time window it serves the chart from there instead of hitting the cloud API—which is faster and works for any range you’ve collected, even months or years back. If local data isn’t there yet (e.g. fresh install, or you’re requesting a window older than your collection started) it falls back to the AC Infinity API as normal.
+
+**Practical upshot:** leave the container running and you’ll build up an indefinite local history that outlasts whatever AC Infinity’s servers retain.
 
 ---
 

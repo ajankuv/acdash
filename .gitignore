@@ -22,3 +22,7 @@ RND/*
 dumps/
 *ac-infinity*dump*.json
 *acdash*debug*.json
+
+# Local SQLite history database (runtime data, not source)
+*.db
+data/
