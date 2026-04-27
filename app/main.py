@@ -295,6 +295,31 @@ def dashboard_snapshot() -> JSONResponse:
     )
 
 
+@app.get("/api/controller-stages")
+def get_controller_stages() -> JSONResponse:
+    """Return all saved stage labels keyed by controller dev_id."""
+    if not credentials_configured():
+        return JSONResponse({"error": "Unauthorized"}, status_code=401)
+    return JSONResponse(storage.get_all_stages())
+
+
+@app.post("/api/controller-stage")
+async def set_controller_stage_endpoint(request: Request) -> JSONResponse:
+    """Save a grow stage label for a controller."""
+    if not credentials_configured():
+        return JSONResponse({"error": "Unauthorized"}, status_code=401)
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error": "Invalid JSON"}, status_code=400)
+    dev_id = (body.get("dev_id") or "").strip()
+    stage = (body.get("stage") or "").strip()
+    if not dev_id or not stage:
+        return JSONResponse({"error": "dev_id and stage are required"}, status_code=400)
+    storage.set_controller_stage(dev_id, stage)
+    return JSONResponse({"ok": True})
+
+
 @app.get("/api/history-chart")
 def api_history_chart(
     dev_id: str = Query("", alias="dev_id"),

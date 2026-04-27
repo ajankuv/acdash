@@ -404,6 +404,7 @@
         container.innerHTML = data.cards_html;
         initSortable();
         applyTempUnit(unit);
+        document.dispatchEvent(new CustomEvent("acdash:snapshot"));
       }
 
       function fetchSnapshot(url) {
@@ -471,7 +472,7 @@
           })
           .then(function (data) {
             if (!data || !container) return;
-            if (isDragging) {
+            if (isDragging || window.__ACDASH_PICKER_OPEN__) {
               pendingSnapshotData = data;
               return;
             }
@@ -487,7 +488,15 @@
 
       window.addEventListener("pointercancel", function () {
         isDragging = false;
-        if (pendingSnapshotData) {
+        if (pendingSnapshotData && !window.__ACDASH_PICKER_OPEN__) {
+          var d = pendingSnapshotData;
+          pendingSnapshotData = null;
+          applySnapshot(d);
+        }
+      });
+
+      document.addEventListener("acdash:picker-closed", function () {
+        if (pendingSnapshotData && !isDragging) {
           var d = pendingSnapshotData;
           pendingSnapshotData = null;
           applySnapshot(d);
@@ -1002,6 +1011,158 @@
           /* re-load if we already have data — optional; user can click Load again */
         }
       });
+    })();
+  </script>
+  <script>
+    (function () {
+      var STAGE_CONFIGS = {
+        "Seedling / Clone": { bg: "rgba(16,185,129,0.18)", border: "rgba(16,185,129,0.30)", text: "#6ee7b7", emoji: "🌱" },
+        "Veg":              { bg: "rgba(14,165,233,0.18)", border: "rgba(14,165,233,0.30)", text: "#7dd3fc", emoji: "🌿" },
+        "Flower":           { bg: "rgba(139,92,246,0.18)", border: "rgba(139,92,246,0.30)", text: "#a78bfa", emoji: "🌸" },
+        "Drying":           { bg: "rgba(245,158,11,0.18)", border: "rgba(245,158,11,0.30)", text: "#fcd34d", emoji: "🍂" },
+      };
+      var STAGES = Object.keys(STAGE_CONFIGS);
+      var stageCache = {};
+      window.__ACDASH_PICKER_OPEN__ = false;
+
+      function acdashUrl(rel) {
+        return new URL(rel, window.location.href.replace(/#.*$/, "")).href;
+      }
+
+      function closeAllPickers() {
+        var wasOpen = window.__ACDASH_PICKER_OPEN__;
+        window.__ACDASH_PICKER_OPEN__ = false;
+        document.querySelectorAll(".acdash-stage-picker").forEach(function (p) {
+          p.style.display = "none";
+        });
+        if (wasOpen) {
+          document.dispatchEvent(new CustomEvent("acdash:picker-closed"));
+        }
+      }
+      document.addEventListener("click", closeAllPickers);
+
+      function renderStripInto(el, devId, stage) {
+        el.innerHTML = "";
+        var cfg = stage ? STAGE_CONFIGS[stage] : null;
+
+        var bar = document.createElement("div");
+        if (cfg) {
+          bar.style.cssText =
+            "display:flex;align-items:center;justify-content:space-between;" +
+            "padding:6px 20px;cursor:pointer;user-select:none;" +
+            "background:" + cfg.bg + ";border-bottom:1px solid " + cfg.border + ";";
+        } else {
+          bar.style.cssText =
+            "display:flex;align-items:center;justify-content:space-between;" +
+            "padding:5px 20px;cursor:pointer;user-select:none;" +
+            "border-bottom:1px solid transparent;";
+        }
+
+        var lbl = document.createElement("span");
+        if (cfg) {
+          lbl.style.cssText =
+            "font-size:11px;font-weight:600;letter-spacing:0.1em;text-transform:uppercase;color:" + cfg.text + ";";
+          lbl.textContent = cfg.emoji + " " + stage;
+        } else {
+          lbl.style.cssText = "font-size:11px;color:#52525b;";
+          lbl.textContent = "+ Set grow stage";
+        }
+
+        var chevSvg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+        chevSvg.setAttribute("viewBox", "0 0 24 24");
+        chevSvg.setAttribute("fill", "none");
+        chevSvg.setAttribute("stroke", cfg ? cfg.text : "#52525b");
+        chevSvg.setAttribute("stroke-width", "2");
+        chevSvg.style.cssText = "width:14px;height:14px;opacity:0.5;flex-shrink:0;";
+        var chevPath = document.createElementNS("http://www.w3.org/2000/svg", "path");
+        chevPath.setAttribute("stroke-linecap", "round");
+        chevPath.setAttribute("stroke-linejoin", "round");
+        chevPath.setAttribute("d", "M19 9l-7 7-7-7");
+        chevSvg.appendChild(chevPath);
+        bar.appendChild(lbl);
+        bar.appendChild(chevSvg);
+
+        var picker = document.createElement("div");
+        picker.className = "acdash-stage-picker";
+        picker.style.cssText =
+          "display:none;position:absolute;left:0;right:0;top:100%;z-index:50;" +
+          "background:#18181b;border-bottom:1px solid #3f3f46;" +
+          "box-shadow:0 10px 25px rgba(0,0,0,0.5);";
+
+        STAGES.forEach(function (s) {
+          var sc = STAGE_CONFIGS[s];
+          var btn = document.createElement("button");
+          btn.type = "button";
+          btn.style.cssText =
+            "display:flex;align-items:center;gap:8px;width:100%;" +
+            "padding:10px 20px;font-size:12px;color:#e4e4e7;" +
+            "background:transparent;border:none;cursor:pointer;text-align:left;";
+          btn.textContent = sc.emoji + " " + s;
+          btn.addEventListener("mouseenter", function () { btn.style.background = "#27272a"; });
+          btn.addEventListener("mouseleave", function () { btn.style.background = "transparent"; });
+          btn.addEventListener("click", function (e) {
+            e.stopPropagation();
+            closeAllPickers();
+            saveAndApplyStage(devId, s);
+          });
+          picker.appendChild(btn);
+        });
+
+        bar.addEventListener("click", function (e) {
+          e.stopPropagation();
+          var isOpen = picker.style.display !== "none";
+          closeAllPickers();
+          if (!isOpen) {
+            picker.style.display = "block";
+            window.__ACDASH_PICKER_OPEN__ = true;
+          }
+        });
+
+        el.style.position = "relative";
+        el.appendChild(bar);
+        el.appendChild(picker);
+      }
+
+      function applyAllStages() {
+        document.querySelectorAll(".acdash-stage-strip").forEach(function (el) {
+          var devId = el.getAttribute("data-dev-id");
+          if (!devId) return;
+          renderStripInto(el, devId, stageCache[devId] || null);
+        });
+      }
+
+      function saveAndApplyStage(devId, stage) {
+        stageCache[devId] = stage;
+        document.querySelectorAll(".acdash-stage-strip[data-dev-id='" + CSS.escape(devId) + "']").forEach(function (el) {
+          renderStripInto(el, devId, stage);
+        });
+        fetch(acdashUrl("./api/controller-stage"), {
+          method: "POST",
+          credentials: "same-origin",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ dev_id: devId, stage: stage }),
+        }).catch(function (err) {
+          if (typeof console !== "undefined") console.error("acdash stage save failed", err);
+        });
+      }
+
+      function loadStages() {
+        fetch(acdashUrl("./api/controller-stages"), {
+          credentials: "same-origin",
+          cache: "no-store",
+          headers: { Accept: "application/json" },
+        })
+          .then(function (r) { return r.ok ? r.json() : {}; })
+          .then(function (data) {
+            if (!data || typeof data !== "object") return;
+            Object.keys(data).forEach(function (id) { stageCache[id] = data[id]; });
+            applyAllStages();
+          })
+          .catch(function () {});
+      }
+
+      loadStages();
+      document.addEventListener("acdash:snapshot", applyAllStages);
     })();
   </script>
 {% endblock %}

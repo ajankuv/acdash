@@ -1,7 +1,9 @@
 <article
   data-controller-id="{{ c.id }}"
-  class="controller-card box-border min-w-[280px] max-w-[28rem] shrink grow-0 basis-[22rem] rounded-2xl border border-zinc-800 bg-zinc-900/60 p-5 shadow-xl shadow-black/40 transition-shadow hover:shadow-emerald-950/20"
+  class="controller-card box-border min-w-[280px] max-w-[28rem] shrink grow-0 basis-[22rem] overflow-hidden rounded-2xl border border-zinc-800 bg-zinc-900/60 shadow-xl shadow-black/40 transition-shadow hover:shadow-emerald-950/20"
 >
+  <div class="acdash-stage-strip" data-dev-id="{{ c.id }}"></div>
+  <div class="p-5">
   <header class="drag-handle mb-4 flex cursor-grab touch-none select-none items-start justify-between gap-3 active:cursor-grabbing">
     <div class="flex min-w-0 flex-1 items-start gap-2">
       <span class="pointer-events-none mt-1 shrink-0 text-zinc-600" aria-hidden="true">
@@ -113,4 +115,5 @@
       {% endfor %}
     </div>
   {% endif %}
+  </div>
 </article>

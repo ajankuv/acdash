@@ -26,6 +26,13 @@ _CREATE_INDEX = """
 CREATE UNIQUE INDEX IF NOT EXISTS idx_dev_ts ON readings (dev_id, ts);
 """
 
+_CREATE_META_TABLE = """
+CREATE TABLE IF NOT EXISTS controller_meta (
+    dev_id TEXT PRIMARY KEY,
+    stage  TEXT NOT NULL
+);
+"""
+
 
 def _connect() -> sqlite3.Connection:
     conn = sqlite3.connect(DB_PATH, check_same_thread=False)
@@ -39,6 +46,7 @@ def init_db() -> None:
         with _connect() as conn:
             conn.execute(_CREATE_TABLE)
             conn.execute(_CREATE_INDEX)
+            conn.execute(_CREATE_META_TABLE)
         logger.info("history db ready: %s", DB_PATH)
     except Exception:
         logger.exception("failed to init history db at %s", DB_PATH)
@@ -65,6 +73,27 @@ def insert_reading(
             )
     except Exception:
         logger.exception("insert_reading failed for dev_id=%s ts=%s", dev_id, ts)
+
+
+def get_all_stages() -> dict[str, str]:
+    try:
+        with _connect() as conn:
+            rows = conn.execute("SELECT dev_id, stage FROM controller_meta").fetchall()
+        return {row["dev_id"]: row["stage"] for row in rows}
+    except Exception:
+        logger.exception("get_all_stages failed")
+        return {}
+
+
+def set_controller_stage(dev_id: str, stage: str) -> None:
+    try:
+        with _connect() as conn:
+            conn.execute(
+                "INSERT OR REPLACE INTO controller_meta (dev_id, stage) VALUES (?, ?)",
+                (dev_id, stage),
+            )
+    except Exception:
+        logger.exception("set_controller_stage failed for dev_id=%s", dev_id)
 
 
 def count_readings(dev_id: str, start_ts: int, end_ts: int) -> int:
