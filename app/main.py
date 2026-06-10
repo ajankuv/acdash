@@ -290,7 +290,7 @@ def dashboard_snapshot() -> JSONResponse:
     cards_html = env.get_template("partials/cards_only.html").render(controllers=controllers)
     show_empty = not controllers and error is None
 
-    controllers_meta = [{"id": c["id"], "name": c["name"]} for c in controllers]
+    controllers_meta = [{"id": c["id"], "name": c["name"], "port_count": c.get("port_count", 4)} for c in controllers]
     return JSONResponse(
         {
             "error": error,
@@ -611,7 +611,7 @@ def dashboard(request: Request) -> Union[HTMLResponse, RedirectResponse]:
 
     controllers, error, _ = get_cached_controllers()
     template = env.get_template("dashboard.html")
-    controllers_meta = [{"id": c["id"], "name": c["name"]} for c in controllers]
+    controllers_meta = [{"id": c["id"], "name": c["name"], "port_count": c.get("port_count", 4)} for c in controllers]
     html = template.render(
         controllers=controllers,
         controllers_json=json.dumps(controllers_meta),

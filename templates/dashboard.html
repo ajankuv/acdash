@@ -1190,7 +1190,11 @@
       fetch(url, {credentials: 'same-origin', cache: 'no-store'})
         .then(function(r){ return r.json(); })
         .then(function(s){ pcmPopulate(s); })
-        .catch(function(){});
+        .catch(function(){
+          var errEl = document.getElementById('pcm-error');
+          errEl.textContent = 'Could not load port settings — try again';
+          errEl.classList.remove('hidden');
+        });
     }
 
     function closePortModal() {
@@ -1202,19 +1206,20 @@
     function pcmPopulate(s) {
       pcmSelectMode(s.mode || 'manual');
       pcmSetState(s.state !== false);
-      var spd = s.speed || 5;
+      // Use != null checks throughout so speed=0 and schedule_begin_mins=0 (midnight) are preserved.
+      var spd = s.speed != null ? s.speed : 5;
       document.getElementById('pcm-speed').value = spd;
       document.getElementById('pcm-speed-val').textContent = spd;
-      document.getElementById('pcm-vpd-target').value = (s.vpd_target || 1.2).toFixed(2);
-      var von = s.on_speed || 8;
+      document.getElementById('pcm-vpd-target').value = (s.vpd_target != null ? s.vpd_target : 1.2).toFixed(2);
+      var von = s.on_speed != null ? s.on_speed : 8;
       document.getElementById('pcm-vpd-on').value = von;
       document.getElementById('pcm-vpd-on-val').textContent = von;
       var voff = s.off_speed != null ? s.off_speed : 3;
       document.getElementById('pcm-vpd-off').value = voff;
       document.getElementById('pcm-vpd-off-val').textContent = voff;
-      document.getElementById('pcm-cycle-on').value = s.cycle_on_mins || 15;
-      document.getElementById('pcm-cycle-off').value = s.cycle_off_mins || 45;
-      var con = s.on_speed || 7;
+      document.getElementById('pcm-cycle-on').value = s.cycle_on_mins != null ? s.cycle_on_mins : 15;
+      document.getElementById('pcm-cycle-off').value = s.cycle_off_mins != null ? s.cycle_off_mins : 45;
+      var con = s.on_speed != null ? s.on_speed : 7;
       document.getElementById('pcm-cycle-on-sp').value = con;
       document.getElementById('pcm-cycle-on-sp-val').textContent = con;
       var coff = s.off_speed != null ? s.off_speed : 0;
@@ -1224,25 +1229,41 @@
       var em = s.schedule_end_mins != null ? s.schedule_end_mins : 1200;
       document.getElementById('pcm-sched-from').value = pad2(Math.floor(bm/60)) + ':' + pad2(bm%60);
       document.getElementById('pcm-sched-to').value = pad2(Math.floor(em/60)) + ':' + pad2(em%60);
-      var son = s.on_speed || 7;
+      var son = s.on_speed != null ? s.on_speed : 7;
       document.getElementById('pcm-sched-on').value = son;
       document.getElementById('pcm-sched-on-val').textContent = son;
       var soff = s.off_speed != null ? s.off_speed : 2;
       document.getElementById('pcm-sched-off').value = soff;
       document.getElementById('pcm-sched-off-val').textContent = soff;
-      var tmins = s.timer_mins || 60;
+      var tmins = s.timer_mins != null ? s.timer_mins : 60;
       document.getElementById('pcm-timer-h').value = Math.floor(tmins/60);
       document.getElementById('pcm-timer-m').value = tmins%60;
-      document.getElementById('pcm-timer-sp').value = s.speed || 7;
-      document.getElementById('pcm-timer-sp-val').textContent = s.speed || 7;
+      var tspd = s.speed != null ? s.speed : 7;
+      document.getElementById('pcm-timer-sp').value = tspd;
+      document.getElementById('pcm-timer-sp-val').textContent = tspd;
     }
 
     function pad2(n){ return n < 10 ? '0'+n : ''+n; }
 
     function pcmSelectMode(mode) {
-      _pcmMode = mode;
+      var autoInfo = document.getElementById('pcm-auto-info');
+
+      // Unknown modes (e.g. "auto" / atType=3 temp-humidity trigger) have no
+      // edit section — fall back to Manual so the modal isn't blank, and show
+      // an info banner explaining what the port is currently set to.
+      var knownModes = ['manual','vpd','cycle','schedule','timer','off'];
+      var effectiveMode = knownModes.indexOf(mode) !== -1 ? mode : 'manual';
+      var isUnknown = effectiveMode !== mode;
+
+      _pcmMode = effectiveMode;
+
+      if (autoInfo) {
+        if (isUnknown) autoInfo.classList.remove('hidden');
+        else autoInfo.classList.add('hidden');
+      }
+
       document.querySelectorAll('.pcm-tab').forEach(function(t) {
-        var active = t.getAttribute('data-mode') === mode;
+        var active = t.getAttribute('data-mode') === effectiveMode;
         t.classList.toggle('bg-emerald-500/15', active);
         t.classList.toggle('border-emerald-500/40', active);
         t.classList.toggle('text-emerald-400', active);
@@ -1250,7 +1271,7 @@
         t.classList.toggle('text-zinc-500', !active);
       });
       document.querySelectorAll('.pcm-section').forEach(function(s){ s.classList.add('hidden'); });
-      var sec = document.getElementById('pcm-section-' + mode);
+      var sec = document.getElementById('pcm-section-' + effectiveMode);
       if (sec) sec.classList.remove('hidden');
       var btn = document.getElementById('pcm-confirm');
       if (mode === 'off') {

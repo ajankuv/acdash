@@ -41,6 +41,22 @@ def _clamp(value: int | float, lo: int | float, hi: int | float) -> int | float:
     return max(lo, min(hi, value))
 
 
+def _raw_int(raw: dict[str, Any], *keys: str, default: int) -> int:
+    """Return int of the first non-None value found in raw for the given keys.
+
+    Uses explicit None check so 0 is preserved correctly — unlike `raw.get(k) or default`
+    which treats 0 as falsy and returns the default instead.
+    """
+    for k in keys:
+        v = raw.get(k)
+        if v is not None:
+            try:
+                return int(v)
+            except (TypeError, ValueError):
+                pass
+    return default
+
+
 class RateLimitError(Exception):
     pass
 
@@ -165,21 +181,45 @@ def normalize_port_settings(raw_list: list[dict[str, Any]]) -> dict[str, Any]:
         return defaults
 
     raw = raw_list[0] if isinstance(raw_list, list) else raw_list
-    at_type = int(raw.get("atType") or raw.get("modeType") or AT_TYPE_ON)
+
+    # Bug fix: use explicit None checks — 0 is a valid atType/loadState/speed value
+    # and must not be swallowed by Python's falsy `or` short-circuit.
+    at_raw = raw.get("atType")
+    mt_raw = raw.get("modeType")
+    if at_raw is not None:
+        try:
+            at_type = int(at_raw)
+        except (TypeError, ValueError):
+            at_type = AT_TYPE_ON
+    elif mt_raw is not None:
+        try:
+            at_type = int(mt_raw)
+        except (TypeError, ValueError):
+            at_type = AT_TYPE_ON
+    else:
+        at_type = AT_TYPE_ON
+
     mode = _AT_TYPE_TO_MODE.get(at_type, "manual")
+
+    # loadState=0 means OFF — must not be treated as falsy
+    load_raw = raw.get("loadState")
+    state = bool(int(load_raw)) if load_raw is not None else True
 
     return {
         "mode": mode,
-        "state": bool(int(raw.get("loadState") or 1)),
-        "speed": int(raw.get("speak") or raw.get("onSpead") or defaults["speed"]),
-        "on_speed": int(raw.get("onSpead") or defaults["on_speed"]),
-        "off_speed": int(raw.get("offSpead") or defaults["off_speed"]),
-        "vpd_target": round(int(raw.get("targetVpd") or 120) / 100.0, 2),
-        "cycle_on_mins": int(raw.get("activeCycleOn") or defaults["cycle_on_mins"]),
-        "cycle_off_mins": int(raw.get("activeCycleOff") or defaults["cycle_off_mins"]),
-        "schedule_begin_mins": int(raw.get("schedStartTime") or defaults["schedule_begin_mins"]),
-        "schedule_end_mins": int(raw.get("schedEndtTime") or defaults["schedule_end_mins"]),
-        "timer_mins": int(raw.get("acitveTimerOn") or raw.get("acitveTimerOff") or defaults["timer_mins"]),
+        "state": state,
+        # speed fields: 0 is a valid speed (port off) — use _raw_int, not `or`
+        "speed":    _raw_int(raw, "speak", "onSpead", default=defaults["speed"]),
+        "on_speed": _raw_int(raw, "onSpead", default=defaults["on_speed"]),
+        "off_speed": _raw_int(raw, "offSpead", default=defaults["off_speed"]),
+        # VPD ×100 in API
+        "vpd_target": round(_raw_int(raw, "targetVpd", default=120) / 100.0, 2),
+        # duration fields: 0 is valid for cycle/timer; schedStartTime=0 means midnight
+        "cycle_on_mins":      _raw_int(raw, "activeCycleOn",  default=defaults["cycle_on_mins"]),
+        "cycle_off_mins":     _raw_int(raw, "activeCycleOff", default=defaults["cycle_off_mins"]),
+        "schedule_begin_mins": _raw_int(raw, "schedStartTime", default=defaults["schedule_begin_mins"]),
+        "schedule_end_mins":   _raw_int(raw, "schedEndtTime",  default=defaults["schedule_end_mins"]),
+        "timer_mins": _raw_int(raw, "acitveTimerOn", "acitveTimerOff", default=defaults["timer_mins"]),
     }
 
 

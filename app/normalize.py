@@ -133,6 +133,12 @@ def normalize_devices(raw_devices: list[dict[str, Any]]) -> list[dict[str, Any]]
         temp_c = _finite_optional(temp_c)
         humidity_pct = _finite_optional(humidity_pct)
         vpd_kpa = _finite_optional(vpd_kpa)
+        port_count_raw = device.get("portCount") or device.get("devPortCount")
+        port_count = (
+            int(port_count_raw)
+            if port_count_raw is not None
+            else len([p for p in ports if p.get("port")])
+        )
         controllers.append(
             {
                 "id": cid,
@@ -147,6 +153,7 @@ def normalize_devices(raw_devices: list[dict[str, Any]]) -> list[dict[str, Any]]
                 "temp_trend": info.get("tTrend"),
                 "humidity_trend": info.get("hTrend"),
                 "mode": info.get("curMode"),
+                "port_count": port_count,
                 "ports": ports,
                 "sensors": sensors_list,
             }
