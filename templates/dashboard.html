@@ -1173,6 +1173,7 @@
   <script>
     // ─── Port control modal ───────────────────────────────────────────
     var _pcmDevId = null, _pcmPort = null, _pcmMode = 'manual', _pcmState = true;
+    function pcmTempUnit() { return localStorage.getItem('acdash_temp_unit') || 'c'; }
 
     function openPortModal(el) {
       var devId = el.getAttribute('data-dev-id');
@@ -1242,7 +1243,7 @@
       document.getElementById('pcm-timer-sp').value = tspd;
       document.getElementById('pcm-timer-sp-val').textContent = tspd;
       // Auto mode triggers — temps shown in the user's display unit
-      var au = getTempUnit();
+      var au = pcmTempUnit();
       document.querySelectorAll('.pcm-auto-unit').forEach(function(e){ e.textContent = au === 'f' ? '°F' : '°C'; });
       document.getElementById('pcm-auto-ht-on').checked = !!s.auto_high_temp_enabled;
       document.getElementById('pcm-auto-lt-on').checked = !!s.auto_low_temp_enabled;
@@ -1329,16 +1330,30 @@
         body.state = _pcmState;
         body.speed = parseInt(document.getElementById('pcm-speed').value);
       } else if (_pcmMode === 'auto') {
-        var su = getTempUnit();
+        var su = pcmTempUnit();
         var toC = function(v){ return su === 'f' ? (v - 32) * 5 / 9 : v; };
-        body.auto_high_temp_enabled = document.getElementById('pcm-auto-ht-on').checked;
-        body.auto_low_temp_enabled = document.getElementById('pcm-auto-lt-on').checked;
-        body.auto_high_humidity_enabled = document.getElementById('pcm-auto-hh-on').checked;
-        body.auto_low_humidity_enabled = document.getElementById('pcm-auto-lh-on').checked;
-        body.auto_high_temp_c = toC(parseFloat(document.getElementById('pcm-auto-ht').value) || 0);
-        body.auto_low_temp_c = toC(parseFloat(document.getElementById('pcm-auto-lt').value) || 0);
-        body.auto_high_humidity = parseInt(document.getElementById('pcm-auto-hh').value) || 0;
-        body.auto_low_humidity = parseInt(document.getElementById('pcm-auto-lh').value) || 0;
+        var htOn = document.getElementById('pcm-auto-ht-on').checked;
+        var ltOn = document.getElementById('pcm-auto-lt-on').checked;
+        var hhOn = document.getElementById('pcm-auto-hh-on').checked;
+        var lhOn = document.getElementById('pcm-auto-lh-on').checked;
+        var htV = parseFloat(document.getElementById('pcm-auto-ht').value);
+        var ltV = parseFloat(document.getElementById('pcm-auto-lt').value);
+        var hhV = parseInt(document.getElementById('pcm-auto-hh').value);
+        var lhV = parseInt(document.getElementById('pcm-auto-lh').value);
+        if ((htOn && isNaN(htV)) || (ltOn && isNaN(ltV)) || (hhOn && isNaN(hhV)) || (lhOn && isNaN(lhV))) {
+          btn.disabled = false;
+          errEl.textContent = 'Enter a value for each enabled trigger';
+          errEl.classList.remove('hidden');
+          return;
+        }
+        body.auto_high_temp_enabled = htOn;
+        body.auto_low_temp_enabled = ltOn;
+        body.auto_high_humidity_enabled = hhOn;
+        body.auto_low_humidity_enabled = lhOn;
+        body.auto_high_temp_c = toC(isNaN(htV) ? 0 : htV);
+        body.auto_low_temp_c = toC(isNaN(ltV) ? 0 : ltV);
+        body.auto_high_humidity = isNaN(hhV) ? 0 : hhV;
+        body.auto_low_humidity = isNaN(lhV) ? 0 : lhV;
         body.on_speed = parseInt(document.getElementById('pcm-auto-on-sp').value);
         body.off_speed = parseInt(document.getElementById('pcm-auto-off-sp').value);
       } else if (_pcmMode === 'vpd') {
