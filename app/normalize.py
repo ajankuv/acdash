@@ -340,8 +340,14 @@ def _normalize_sensors(sensors: list[dict[str, Any]], controller_id: str) -> lis
         sdata = sensor.get("sensorData")
         if stype is None or sdata is None:
             continue
-        stype = int(stype)
-        unit = int(sensor.get("sensorUnit", 1))
+        try:
+            stype = int(stype)
+        except (TypeError, ValueError):
+            continue
+        try:
+            unit = int(sensor.get("sensorUnit", 1))
+        except (TypeError, ValueError):
+            unit = 1
         ha = _is_ha_sensor_scheme(sensor)
         type_name = (
             HA_SENSOR_NAMES.get(stype, f"type_{stype}")

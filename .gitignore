@@ -1,14 +1,26 @@
 .DS_Store
 
+# Python
 .venv/
 __pycache__/
 *.py[cod]
+*.pyo
 .Python
-.env
+.pytest_cache/
 
-# IDE / local tooling (not part of the published app)
+# Credentials and local config — NEVER commit these
+.env
+.env.*
+*.env
+/app/data/
+
+# IDE / local tooling
 .cursor/
 .claude/
+
+# Brainstorming / planning session artifacts (developer-local)
+.superpowers/
+docs/superpowers/
 
 # Local ops notes (optional for contributors)
 DASHBOARD.md
@@ -18,11 +30,24 @@ DASHBOARD.md
 RND/*
 !RND/.gitignore
 
-# Dashboard “API debug dump” exports and other pastebacks — can contain account, device IDs, Wi‑Fi, etc.
+# Debug dump exports — contain account fields, device IDs, Wi‑Fi names
 dumps/
 *ac-infinity*dump*.json
 *acdash*debug*.json
+*.dump.json
 
-# Local SQLite history database (runtime data, not source)
+# Local SQLite history + runtime data
 *.db
+*.sqlite
 data/
+
+# Logs and process files
+*.log
+*.pid
+
+# Screenshot mockup source (PNG is committed, HTML source is not)
+docs/assets/mockup.html
+
+# Dev / QC scripts — useful locally but not part of the published app
+tests/
+app/qc_*.py

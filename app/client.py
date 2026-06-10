@@ -17,6 +17,11 @@ DEVICES_ENDPOINT = f"{API_BASE}/user/devInfoListAll"
 DEV_MODE_SETTING_ENDPOINT = f"{API_BASE}/dev/getdevModeSettingList"
 DEV_SETTING_ENDPOINT = f"{API_BASE}/dev/getDevSetting"
 HISTORY_ENDPOINT = f"{API_BASE}/log/dataPage"
+ADD_DEV_MODE_ENDPOINT = f"{API_BASE}/dev/addDevMode"
+AUTOMATIONS_ENDPOINT = f"{API_BASE}/version=2.0/dev/getGroups"
+AUTOMATION_TOGGLE_ENDPOINT = f"{API_BASE}/version=2.0/dev/updateGroupsIsOn"
+AUTOMATION_DELETE_ENDPOINT = f"{API_BASE}/version=2.0/dev/delByid"
+AUTOMATION_CREATE_ENDPOINT = f"{API_BASE}/version=2.0/dev/addGroups"
 
 
 def _normalize_password(secret: str) -> str:
@@ -86,6 +91,14 @@ class ACInfinityClient:
 
     def close(self) -> None:
         self._client.close()
+
+    def _v2_headers(self) -> dict[str, str]:
+        """Extra headers required for version=2.0/dev/* endpoints."""
+        return {
+            "token": self.token or "",
+            "devType": "11",
+            "minversion": "0.0.0",
+        }
 
     def _login_post(self, em: str, pw: str, *, use_query: bool) -> dict[str, Any] | None:
         """POST ``user/appUserLogin``: form body (legacy) or query string + fcm (Android)."""
@@ -225,6 +238,91 @@ class ACInfinityClient:
             DEV_SETTING_ENDPOINT,
             {"devId": str(dev_id), "port": port},
         )
+
+    def set_port_mode(self, dev_id: str | int, port: int, payload: dict[str, Any]) -> dict[str, Any] | None:
+        """POST dev/addDevMode — write port mode settings. Full payload required (read-before-write)."""
+        return self._post_with_token(
+            ADD_DEV_MODE_ENDPOINT,
+            {**payload, "devId": str(dev_id), "port": int(port)},
+        )
+
+    def get_automations_raw(self, dev_id: str | int) -> list[dict[str, Any]]:
+        """POST version=2.0/dev/getGroups — raw named automation program list."""
+        if not self.token and not self.authenticate():
+            return []
+        try:
+            response = self._client.post(
+                AUTOMATIONS_ENDPOINT,
+                data={"devId": str(dev_id), "userId": self.token},
+                headers=self._v2_headers(),
+            )
+            response.raise_for_status()
+            body: dict[str, Any] = response.json()
+        except (httpx.HTTPError, ValueError) as e:
+            logger.error("getGroups failed: %s", e)
+            return []
+        if not isinstance(body, dict) or body.get("code") != 200:
+            logger.warning("getGroups non-200: %s", body.get("msg") if isinstance(body, dict) else body)
+            return []
+        data = body.get("data") or []
+        return data if isinstance(data, list) else []
+
+    def toggle_automation_raw(
+        self, dev_id: str | int, adv_id: str | int, *, is_on: bool
+    ) -> dict[str, Any] | None:
+        """POST version=2.0/dev/updateGroupsIsOn."""
+        if not self.token and not self.authenticate():
+            return None
+        try:
+            response = self._client.post(
+                AUTOMATION_TOGGLE_ENDPOINT,
+                data={
+                    "devId": str(dev_id),
+                    "advId": str(adv_id),
+                    "isflag": 1 if is_on else 0,
+                    "isDel": 0,
+                },
+                headers=self._v2_headers(),
+            )
+            response.raise_for_status()
+            return response.json()
+        except (httpx.HTTPError, ValueError) as e:
+            logger.error("updateGroupsIsOn failed: %s", e)
+            return None
+
+    def delete_automation_raw(self, dev_id: str | int, adv_id: str | int) -> dict[str, Any] | None:
+        """POST version=2.0/dev/delByid."""
+        if not self.token and not self.authenticate():
+            return None
+        try:
+            response = self._client.post(
+                AUTOMATION_DELETE_ENDPOINT,
+                data={"devId": str(dev_id), "advId": str(adv_id)},
+                headers=self._v2_headers(),
+            )
+            response.raise_for_status()
+            return response.json()
+        except (httpx.HTTPError, ValueError) as e:
+            logger.error("delByid failed: %s", e)
+            return None
+
+    def create_automation_raw(
+        self, dev_id: str | int, payload: dict[str, Any]
+    ) -> dict[str, Any] | None:
+        """POST version=2.0/dev/addGroups."""
+        if not self.token and not self.authenticate():
+            return None
+        try:
+            response = self._client.post(
+                AUTOMATION_CREATE_ENDPOINT,
+                data={**payload, "devId": str(dev_id), "userId": self.token},
+                headers=self._v2_headers(),
+            )
+            response.raise_for_status()
+            return response.json()
+        except (httpx.HTTPError, ValueError) as e:
+            logger.error("addGroups failed: %s", e)
+            return None
 
     def history_data_page(
         self,

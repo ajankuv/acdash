@@ -14,11 +14,18 @@
         <p class="mt-0.5 text-xs text-zinc-500">ID {{ c.id }}</p>
       </div>
     </div>
-    {% if c.mode is not none %}
-      <span class="shrink-0 rounded-full bg-emerald-500/15 px-2.5 py-1 text-xs font-medium text-emerald-400 ring-1 ring-emerald-500/30">
-        Mode {{ c.mode }}
-      </span>
-    {% endif %}
+    <div class="flex shrink-0 items-center gap-2">
+      {% if c.mode is not none %}
+        <span class="rounded-full bg-emerald-500/15 px-2.5 py-1 text-xs font-medium text-emerald-400 ring-1 ring-emerald-500/30">
+          Mode {{ c.mode }}
+        </span>
+      {% endif %}
+      <button data-dev-id="{{ c.id }}"
+              onclick="event.stopPropagation();openAutomationsModal(this.getAttribute('data-dev-id'))"
+              class="rounded-full border border-zinc-700 px-2.5 py-1 text-[11px] text-zinc-500 transition hover:border-zinc-600 hover:text-zinc-300">
+        Automations ›
+      </button>
+    </div>
   </header>
 
   <div class="mb-4 grid grid-cols-3 gap-2 text-center">
@@ -64,7 +71,12 @@
     <ul class="mb-4 space-y-2">
       {% for p in c.ports %}
         {% if p.port %}
-          <li class="flex items-center justify-between gap-2 rounded-lg bg-black/30 px-3 py-2 ring-1 ring-zinc-800/60">
+          <li class="flex cursor-pointer items-center justify-between gap-2 rounded-lg bg-black/30 px-3 py-2 ring-1 ring-zinc-800/60 transition hover:bg-black/50 hover:ring-zinc-700/80"
+              data-dev-id="{{ c.id }}"
+              data-port="{{ p.port }}"
+              data-port-name="{{ p.name }}"
+              data-ctrl-name="{{ c.name }}"
+              onclick="openPortModal(this)">
             <div class="min-w-0">
               <div class="truncate text-sm text-zinc-200">{{ p.name }}</div>
               <div class="text-[11px] text-zinc-500">

@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import json
 import logging
 import os
@@ -44,6 +46,7 @@ def init_db() -> None:
     try:
         os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
         with _connect() as conn:
+            conn.execute("PRAGMA journal_mode=WAL")
             conn.execute(_CREATE_TABLE)
             conn.execute(_CREATE_INDEX)
             conn.execute(_CREATE_META_TABLE)

@@ -1,4 +1,8 @@
 {% extends "base.html" %}
+{% block modals %}
+  {% include "partials/control_modal.html" %}
+  {% include "partials/automations_modal.html" %}
+{% endblock %}
 {% block content %}
   <div id="dashboard-error">
     {% if error %}
@@ -529,6 +533,7 @@
       setTimeout(swapDashboard, 400);
 
       if (btnNow) btnNow.addEventListener("click", swapDashboard);
+      window.acdashRefresh = swapDashboard;
 
       var btnC = document.getElementById("acdash-unit-c");
       var btnF = document.getElementById("acdash-unit-f");
@@ -1164,5 +1169,275 @@
       loadStages();
       document.addEventListener("acdash:snapshot", applyAllStages);
     })();
+  </script>
+  <script>
+    // ─── Port control modal ───────────────────────────────────────────
+    var _pcmDevId = null, _pcmPort = null, _pcmMode = 'manual', _pcmState = true;
+
+    function openPortModal(el) {
+      var devId = el.getAttribute('data-dev-id');
+      var port = el.getAttribute('data-port');
+      var portName = el.getAttribute('data-port-name');
+      var ctrlName = el.getAttribute('data-ctrl-name');
+      _pcmDevId = devId; _pcmPort = port;
+      document.getElementById('pcm-port-name').textContent = portName;
+      document.getElementById('pcm-port-sub').textContent = 'Port ' + port + ' · ' + ctrlName;
+      document.getElementById('pcm-error').classList.add('hidden');
+      var modal = document.getElementById('port-control-modal');
+      modal.classList.remove('hidden');
+      modal.classList.add('flex');
+      var url = '/api/port-settings?dev_id=' + encodeURIComponent(devId) + '&port=' + port;
+      fetch(url, {credentials: 'same-origin', cache: 'no-store'})
+        .then(function(r){ return r.json(); })
+        .then(function(s){ pcmPopulate(s); })
+        .catch(function(){});
+    }
+
+    function closePortModal() {
+      var modal = document.getElementById('port-control-modal');
+      modal.classList.add('hidden');
+      modal.classList.remove('flex');
+    }
+
+    function pcmPopulate(s) {
+      pcmSelectMode(s.mode || 'manual');
+      pcmSetState(s.state !== false);
+      var spd = s.speed || 5;
+      document.getElementById('pcm-speed').value = spd;
+      document.getElementById('pcm-speed-val').textContent = spd;
+      document.getElementById('pcm-vpd-target').value = (s.vpd_target || 1.2).toFixed(2);
+      var von = s.on_speed || 8;
+      document.getElementById('pcm-vpd-on').value = von;
+      document.getElementById('pcm-vpd-on-val').textContent = von;
+      var voff = s.off_speed != null ? s.off_speed : 3;
+      document.getElementById('pcm-vpd-off').value = voff;
+      document.getElementById('pcm-vpd-off-val').textContent = voff;
+      document.getElementById('pcm-cycle-on').value = s.cycle_on_mins || 15;
+      document.getElementById('pcm-cycle-off').value = s.cycle_off_mins || 45;
+      var con = s.on_speed || 7;
+      document.getElementById('pcm-cycle-on-sp').value = con;
+      document.getElementById('pcm-cycle-on-sp-val').textContent = con;
+      var coff = s.off_speed != null ? s.off_speed : 0;
+      document.getElementById('pcm-cycle-off-sp').value = coff;
+      document.getElementById('pcm-cycle-off-sp-val').textContent = coff;
+      var bm = s.schedule_begin_mins != null ? s.schedule_begin_mins : 480;
+      var em = s.schedule_end_mins != null ? s.schedule_end_mins : 1200;
+      document.getElementById('pcm-sched-from').value = pad2(Math.floor(bm/60)) + ':' + pad2(bm%60);
+      document.getElementById('pcm-sched-to').value = pad2(Math.floor(em/60)) + ':' + pad2(em%60);
+      var son = s.on_speed || 7;
+      document.getElementById('pcm-sched-on').value = son;
+      document.getElementById('pcm-sched-on-val').textContent = son;
+      var soff = s.off_speed != null ? s.off_speed : 2;
+      document.getElementById('pcm-sched-off').value = soff;
+      document.getElementById('pcm-sched-off-val').textContent = soff;
+      var tmins = s.timer_mins || 60;
+      document.getElementById('pcm-timer-h').value = Math.floor(tmins/60);
+      document.getElementById('pcm-timer-m').value = tmins%60;
+      document.getElementById('pcm-timer-sp').value = s.speed || 7;
+      document.getElementById('pcm-timer-sp-val').textContent = s.speed || 7;
+    }
+
+    function pad2(n){ return n < 10 ? '0'+n : ''+n; }
+
+    function pcmSelectMode(mode) {
+      _pcmMode = mode;
+      document.querySelectorAll('.pcm-tab').forEach(function(t) {
+        var active = t.getAttribute('data-mode') === mode;
+        t.classList.toggle('bg-emerald-500/15', active);
+        t.classList.toggle('border-emerald-500/40', active);
+        t.classList.toggle('text-emerald-400', active);
+        t.classList.toggle('border-zinc-700', !active);
+        t.classList.toggle('text-zinc-500', !active);
+      });
+      document.querySelectorAll('.pcm-section').forEach(function(s){ s.classList.add('hidden'); });
+      var sec = document.getElementById('pcm-section-' + mode);
+      if (sec) sec.classList.remove('hidden');
+      var btn = document.getElementById('pcm-confirm');
+      if (mode === 'off') {
+        btn.textContent = 'Confirm off';
+        btn.classList.remove('bg-emerald-500','hover:bg-emerald-400');
+        btn.classList.add('bg-red-600','hover:bg-red-500');
+      } else {
+        btn.textContent = 'Confirm';
+        btn.classList.remove('bg-red-600','hover:bg-red-500');
+        btn.classList.add('bg-emerald-500','hover:bg-emerald-400');
+      }
+    }
+
+    function pcmSetState(on) {
+      _pcmState = on;
+      document.querySelectorAll('.pcm-onoff').forEach(function(b) {
+        var isOn = b.getAttribute('data-val') === 'on';
+        var active = isOn ? on : !on;
+        b.classList.toggle('bg-emerald-500', isOn && active);
+        b.classList.toggle('text-white', active);
+        b.classList.toggle('border-emerald-500', isOn && active);
+        b.classList.toggle('bg-zinc-700', !isOn && active);
+        b.classList.toggle('border-zinc-700', !(isOn && active));
+        b.classList.toggle('text-zinc-400', !active);
+      });
+    }
+
+    function submitPortControl() {
+      var btn = document.getElementById('pcm-confirm');
+      btn.disabled = true;
+      var errEl = document.getElementById('pcm-error');
+      errEl.classList.add('hidden');
+      var body = {dev_id: _pcmDevId, port: _pcmPort, mode: _pcmMode};
+      if (_pcmMode === 'manual') {
+        body.state = _pcmState;
+        body.speed = parseInt(document.getElementById('pcm-speed').value);
+      } else if (_pcmMode === 'vpd') {
+        body.vpd_target = parseFloat(document.getElementById('pcm-vpd-target').value);
+        body.on_speed = parseInt(document.getElementById('pcm-vpd-on').value);
+        body.off_speed = parseInt(document.getElementById('pcm-vpd-off').value);
+      } else if (_pcmMode === 'cycle') {
+        body.cycle_on_mins = parseInt(document.getElementById('pcm-cycle-on').value);
+        body.cycle_off_mins = parseInt(document.getElementById('pcm-cycle-off').value);
+        body.on_speed = parseInt(document.getElementById('pcm-cycle-on-sp').value);
+        body.off_speed = parseInt(document.getElementById('pcm-cycle-off-sp').value);
+      } else if (_pcmMode === 'schedule') {
+        var fp = document.getElementById('pcm-sched-from').value.split(':').map(Number);
+        var tp = document.getElementById('pcm-sched-to').value.split(':').map(Number);
+        body.schedule_begin_mins = fp[0]*60 + fp[1];
+        body.schedule_end_mins = tp[0]*60 + tp[1];
+        body.on_speed = parseInt(document.getElementById('pcm-sched-on').value);
+        body.off_speed = parseInt(document.getElementById('pcm-sched-off').value);
+      } else if (_pcmMode === 'timer') {
+        body.timer_mins = parseInt(document.getElementById('pcm-timer-h').value)*60
+                        + parseInt(document.getElementById('pcm-timer-m').value);
+        body.speed = parseInt(document.getElementById('pcm-timer-sp').value);
+      }
+      fetch('/api/port-control', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(body)
+      }).then(function(r){ return r.json(); }).then(function(data) {
+        btn.disabled = false;
+        if (data.ok) {
+          closePortModal();
+          if (window.acdashRefresh) window.acdashRefresh();
+        } else {
+          errEl.textContent = data.error || 'Command failed';
+          errEl.classList.remove('hidden');
+        }
+      }).catch(function() {
+        btn.disabled = false;
+        errEl.textContent = 'Network error — try again';
+        errEl.classList.remove('hidden');
+      });
+    }
+
+    // ─── Automations modal ────────────────────────────────────────────
+    var _amDevId = null;
+
+    function openAutomationsModal(devId) {
+      _amDevId = devId;
+      document.getElementById('am-error').classList.add('hidden');
+      document.getElementById('am-list').innerHTML = '<p class="text-center text-xs text-zinc-600">Loading…</p>';
+      document.getElementById('am-create-form').classList.add('hidden');
+      document.getElementById('am-add-btn').classList.remove('hidden');
+      var modal = document.getElementById('automations-modal');
+      modal.classList.remove('hidden');
+      modal.classList.add('flex');
+      // Populate port checkboxes from cached controllers
+      var ctrls = window.__ACDASH_CONTROLLERS__ || [];
+      var ctrl = ctrls.find ? ctrls.find(function(c){ return c.id === devId; }) : null;
+      var portCount = (ctrl && ctrl.port_count) ? ctrl.port_count : 4;
+      var cb = document.getElementById('am-port-checkboxes');
+      cb.innerHTML = '';
+      for (var i = 1; i <= portCount; i++) {
+        cb.innerHTML += '<label class="flex items-center gap-1 text-xs text-zinc-400"><input type="checkbox" value="' + i + '" class="am-port-cb accent-emerald-500"> Port ' + i + '</label>';
+      }
+      fetch('/api/automations?dev_id=' + encodeURIComponent(devId), {credentials: 'same-origin', cache: 'no-store'})
+        .then(function(r){ return r.json(); })
+        .then(function(list){ amRenderList(list); })
+        .catch(function(){ document.getElementById('am-list').innerHTML = '<p class="text-center text-xs text-red-400">Could not load automations</p>'; });
+    }
+
+    function closeAutomationsModal() {
+      var modal = document.getElementById('automations-modal');
+      modal.classList.add('hidden');
+      modal.classList.remove('flex');
+    }
+
+    function amRenderList(list) {
+      var el = document.getElementById('am-list');
+      if (!list || !list.length) {
+        el.innerHTML = '<p class="text-center text-xs text-zinc-600">No automations yet</p>';
+        return;
+      }
+      // adv_id and name stored in data-* attributes (HTML-escaped) so JS never sees
+      // unescaped API data injected directly into onclick strings.
+      el.innerHTML = list.map(function(a) {
+        var portStr = (a.ports || []).join(', ') || '—';
+        var onCls = a.is_on ? 'bg-emerald-500/20 text-emerald-400 ring-1 ring-emerald-500/30' : 'bg-zinc-800 text-zinc-500 ring-1 ring-zinc-700';
+        var safeId = escHtml(String(a.adv_id));
+        var safeName = escHtml(String(a.name));
+        var newState = (!a.is_on).toString();
+        return '<div data-adv-id="' + safeId + '" class="flex items-center justify-between rounded-xl bg-black/30 px-3 py-2 ring-1 ring-zinc-800/60">' +
+          '<div><div class="text-sm text-zinc-200">' + safeName + '</div><div class="text-[11px] text-zinc-500">Ports ' + portStr + '</div></div>' +
+          '<div class="flex items-center gap-2">' +
+          '<button data-adv-id="' + safeId + '" data-new-state="' + newState + '" data-name="' + safeName + '" onclick="amToggle(this)" class="rounded-full px-2 py-0.5 text-[11px] font-semibold ' + onCls + '">' + (a.is_on ? 'ON' : 'OFF') + '</button>' +
+          '<button data-adv-id="' + safeId + '" data-name="' + safeName + '" onclick="amDeleteConfirm(this)" class="text-zinc-600 hover:text-zinc-400 text-sm">✕</button>' +
+          '</div></div>';
+      }).join('');
+    }
+
+    function escHtml(s) {
+      return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+    }
+
+    function amToggle(btn) {
+      var advId = btn.getAttribute('data-adv-id');
+      var newState = btn.getAttribute('data-new-state') === 'true';
+      var name = btn.getAttribute('data-name');
+      if (!confirm((newState ? 'Enable' : 'Disable') + ' "' + name + '"?')) return;
+      fetch('/api/automation-toggle', {
+        method: 'POST', credentials: 'same-origin',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({dev_id: _amDevId, adv_id: advId, is_on: newState})
+      }).then(function(r){ return r.json(); }).then(function(d) {
+        if (d.ok) { openAutomationsModal(_amDevId); }
+        else { document.getElementById('am-error').textContent = d.error || 'Failed'; document.getElementById('am-error').classList.remove('hidden'); }
+      });
+    }
+
+    function amDeleteConfirm(btn) {
+      var advId = btn.getAttribute('data-adv-id');
+      var name = btn.getAttribute('data-name');
+      if (!confirm('Delete "' + name + '"?')) return;
+      fetch('/api/automation', {
+        method: 'DELETE', credentials: 'same-origin',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({dev_id: _amDevId, adv_id: advId})
+      }).then(function(r){ return r.json(); }).then(function(d) {
+        if (d.ok) { openAutomationsModal(_amDevId); }
+        else { document.getElementById('am-error').textContent = d.error || 'Failed'; document.getElementById('am-error').classList.remove('hidden'); }
+      });
+    }
+
+    function submitCreateAutomation() {
+      var name = document.getElementById('am-new-name').value.trim();
+      var ports = Array.prototype.filter.call(document.querySelectorAll('.am-port-cb:checked'), function(c){ return true; }).map(function(c){ return parseInt(c.value); });
+      if (!name || !ports.length) { alert('Name and at least one port are required'); return; }
+      var fp = document.getElementById('am-new-from').value.split(':').map(Number);
+      var tp = document.getElementById('am-new-to').value.split(':').map(Number);
+      fetch('/api/automation-create', {
+        method: 'POST', credentials: 'same-origin',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+          dev_id: _amDevId, name: name, ports: ports,
+          on_speed: parseInt(document.getElementById('am-new-on-sp').value),
+          off_speed: parseInt(document.getElementById('am-new-off-sp').value),
+          begin_mins: fp[0]*60 + fp[1],
+          end_mins: tp[0]*60 + tp[1]
+        })
+      }).then(function(r){ return r.json(); }).then(function(d) {
+        if (d.ok) { openAutomationsModal(_amDevId); }
+        else { document.getElementById('am-error').textContent = d.error || 'Failed'; document.getElementById('am-error').classList.remove('hidden'); }
+      });
+    }
   </script>
 {% endblock %}

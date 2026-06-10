@@ -22,6 +22,13 @@ from app import storage
 from app.client import ACInfinityClient
 from app.collector import COLLECTOR_INTERVAL, collector_loop
 from app.debug_bundle import collect_debug_bundle
+from app.control import (
+    ControlError,
+    RateLimitError,
+    get_automations,
+    read_port_settings,
+    write_port_control,
+)
 from app.history import fetch_history_for_chart, thin_points
 from app.normalize import normalize_devices
 
@@ -317,6 +324,198 @@ async def set_controller_stage_endpoint(request: Request) -> JSONResponse:
     if not dev_id or not stage:
         return JSONResponse({"error": "dev_id and stage are required"}, status_code=400)
     storage.set_controller_stage(dev_id, stage)
+    return JSONResponse({"ok": True})
+
+
+@app.get("/api/port-settings")
+def api_port_settings(
+    dev_id: str = Query("", alias="dev_id"),
+    port: int = Query(1, ge=1, le=8),
+) -> JSONResponse:
+    """Return current mode settings for a port — used to pre-populate the control modal."""
+    if not credentials_configured():
+        return JSONResponse({"error": "Unauthorized"}, status_code=401)
+    dev_id = dev_id.strip()
+    if not dev_id:
+        return JSONResponse({"error": "dev_id is required"}, status_code=400)
+    email, password = _get_credentials()
+    if not email or not password:
+        return JSONResponse({"error": "Unauthorized"}, status_code=401)
+    client = ACInfinityClient(email, password)
+    try:
+        settings = read_port_settings(client, dev_id, port)
+    finally:
+        client.close()
+    return JSONResponse(settings)
+
+
+@app.post("/api/port-control")
+async def api_port_control(request: Request) -> JSONResponse:
+    """Apply port mode/speed changes. Body: {dev_id, port, mode, ...mode fields}."""
+    if not credentials_configured():
+        return JSONResponse({"error": "Unauthorized"}, status_code=401)
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error": "Invalid JSON"}, status_code=400)
+
+    dev_id = str(body.get("dev_id") or "").strip()
+    port_raw = body.get("port")
+    if not dev_id or port_raw is None:
+        return JSONResponse({"error": "dev_id and port are required"}, status_code=400)
+    try:
+        port = int(port_raw)
+        if not (1 <= port <= 8):
+            raise ValueError
+    except (TypeError, ValueError):
+        return JSONResponse({"error": "port must be an integer between 1 and 8"}, status_code=400)
+
+    changes: dict[str, Any] = {}
+    for key in (
+        "mode", "state", "speed", "on_speed", "off_speed",
+        "vpd_target", "cycle_on_mins", "cycle_off_mins",
+        "schedule_begin_mins", "schedule_end_mins", "timer_mins",
+    ):
+        if key in body:
+            changes[key] = body[key]
+
+    email, password = _get_credentials()
+    if not email or not password:
+        return JSONResponse({"error": "Unauthorized"}, status_code=401)
+    client = ACInfinityClient(email, password)
+    try:
+        write_port_control(client, dev_id, port, changes)
+    except RateLimitError as e:
+        return JSONResponse({"error": str(e)}, status_code=429)
+    except ControlError as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+    finally:
+        client.close()
+    return JSONResponse({"ok": True})
+
+
+@app.get("/api/automations")
+def api_automations(dev_id: str = Query("", alias="dev_id")) -> JSONResponse:
+    """Return named automation programs for a controller."""
+    if not credentials_configured():
+        return JSONResponse({"error": "Unauthorized"}, status_code=401)
+    dev_id = dev_id.strip()
+    if not dev_id:
+        return JSONResponse({"error": "dev_id is required"}, status_code=400)
+    email, password = _get_credentials()
+    if not email or not password:
+        return JSONResponse({"error": "Unauthorized"}, status_code=401)
+    client = ACInfinityClient(email, password)
+    try:
+        automations = get_automations(client, dev_id)
+    finally:
+        client.close()
+    return JSONResponse(automations)
+
+
+@app.post("/api/automation-toggle")
+async def api_automation_toggle(request: Request) -> JSONResponse:
+    """Enable or disable a named automation program."""
+    if not credentials_configured():
+        return JSONResponse({"error": "Unauthorized"}, status_code=401)
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error": "Invalid JSON"}, status_code=400)
+    dev_id = str(body.get("dev_id") or "").strip()
+    adv_id = str(body.get("adv_id") or "").strip()
+    is_on = bool(body.get("is_on"))
+    if not dev_id or not adv_id:
+        return JSONResponse({"error": "dev_id and adv_id are required"}, status_code=400)
+    email, password = _get_credentials()
+    if not email or not password:
+        return JSONResponse({"error": "Unauthorized"}, status_code=401)
+    client = ACInfinityClient(email, password)
+    try:
+        result = client.toggle_automation_raw(dev_id, adv_id, is_on=is_on)
+    finally:
+        client.close()
+    if result is None:
+        return JSONResponse({"error": "Could not reach AC Infinity"}, status_code=502)
+    code = result.get("code") if isinstance(result, dict) else None
+    if code != 200:
+        msg = result.get("msg", "") if isinstance(result, dict) else ""
+        return JSONResponse({"error": msg or "Command failed"}, status_code=400)
+    return JSONResponse({"ok": True})
+
+
+@app.delete("/api/automation")
+async def api_automation_delete(request: Request) -> JSONResponse:
+    """Delete a named automation program."""
+    if not credentials_configured():
+        return JSONResponse({"error": "Unauthorized"}, status_code=401)
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error": "Invalid JSON"}, status_code=400)
+    dev_id = str(body.get("dev_id") or "").strip()
+    adv_id = str(body.get("adv_id") or "").strip()
+    if not dev_id or not adv_id:
+        return JSONResponse({"error": "dev_id and adv_id are required"}, status_code=400)
+    email, password = _get_credentials()
+    if not email or not password:
+        return JSONResponse({"error": "Unauthorized"}, status_code=401)
+    client = ACInfinityClient(email, password)
+    try:
+        result = client.delete_automation_raw(dev_id, adv_id)
+    finally:
+        client.close()
+    if result is None:
+        return JSONResponse({"error": "Could not reach AC Infinity"}, status_code=502)
+    code = result.get("code") if isinstance(result, dict) else None
+    if code != 200:
+        msg = result.get("msg", "") if isinstance(result, dict) else ""
+        return JSONResponse({"error": msg or "Command failed"}, status_code=400)
+    return JSONResponse({"ok": True})
+
+
+@app.post("/api/automation-create")
+async def api_automation_create(request: Request) -> JSONResponse:
+    """Create a new named automation program."""
+    if not credentials_configured():
+        return JSONResponse({"error": "Unauthorized"}, status_code=401)
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error": "Invalid JSON"}, status_code=400)
+    dev_id = str(body.get("dev_id") or "").strip()
+    name = str(body.get("name") or "").strip()[:64]
+    ports: list[int] = [int(p) for p in (body.get("ports") or []) if str(p).isdigit() and 1 <= int(p) <= 8]
+    on_speed = int(body.get("on_speed") or 5)
+    off_speed = int(body.get("off_speed") or 0)
+    begin_mins = int(body.get("begin_mins") or 0)
+    end_mins = int(body.get("end_mins") or 1439)
+    if not dev_id or not name or not ports:
+        return JSONResponse({"error": "dev_id, name, and ports are required"}, status_code=400)
+    bitmask = sum(1 << (p - 1) for p in ports)
+    payload = {
+        "advName": name,
+        "grouptDevType": bitmask,
+        "onSpeed": on_speed,
+        "offSpeed": off_speed,
+        "beginTime": begin_mins,
+        "endTime": end_mins,
+        "isOn": 1,
+    }
+    email, password = _get_credentials()
+    if not email or not password:
+        return JSONResponse({"error": "Unauthorized"}, status_code=401)
+    client = ACInfinityClient(email, password)
+    try:
+        result = client.create_automation_raw(dev_id, payload)
+    finally:
+        client.close()
+    if result is None:
+        return JSONResponse({"error": "Could not reach AC Infinity"}, status_code=502)
+    code = result.get("code") if isinstance(result, dict) else None
+    if code != 200:
+        msg = result.get("msg", "") if isinstance(result, dict) else ""
+        return JSONResponse({"error": msg or "Command failed"}, status_code=400)
     return JSONResponse({"ok": True})
 
 

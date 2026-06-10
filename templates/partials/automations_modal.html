@@ -1,0 +1,68 @@
+{# Automations modal — hidden by default, populated by JS openAutomationsModal() #}
+<div id="automations-modal"
+     class="fixed inset-0 z-50 hidden items-center justify-center bg-black/75 backdrop-blur-sm"
+     onclick="if(event.target===this)closeAutomationsModal()">
+  <div class="w-80 rounded-2xl border border-zinc-700 bg-zinc-900 p-5 shadow-2xl">
+
+    <div class="mb-4 flex items-center justify-between border-b border-zinc-800 pb-4">
+      <h3 class="text-base font-semibold text-zinc-100">Automations</h3>
+      <button onclick="closeAutomationsModal()" class="text-zinc-600 hover:text-zinc-400">✕</button>
+    </div>
+
+    <div id="am-error"
+         class="mb-3 hidden rounded-lg bg-red-900/40 px-3 py-2 text-xs text-red-300 ring-1 ring-red-800/60"></div>
+
+    {# List — populated by JS #}
+    <div id="am-list" class="mb-3 space-y-2">
+      <p class="text-center text-xs text-zinc-600">Loading…</p>
+    </div>
+
+    {# Create form — collapsed by default #}
+    <div id="am-create-form" class="hidden rounded-xl border border-zinc-800 bg-black/30 p-3">
+      <p class="mb-2 text-xs font-semibold text-zinc-400">New automation</p>
+      <input id="am-new-name" type="text" placeholder="Name" maxlength="64"
+             class="mb-2 w-full rounded-lg border border-zinc-700 bg-black/40 px-3 py-1.5 text-sm text-zinc-200 outline-none placeholder:text-zinc-600">
+      <div id="am-port-checkboxes" class="mb-2 flex flex-wrap gap-2"></div>
+      <div class="mb-2 grid grid-cols-2 gap-2">
+        <div>
+          <div class="mb-1 text-[10px] text-zinc-600">On speed</div>
+          <input id="am-new-on-sp" type="range" min="1" max="10" value="7" class="w-full accent-emerald-500">
+        </div>
+        <div>
+          <div class="mb-1 text-[10px] text-zinc-600">Off speed</div>
+          <input id="am-new-off-sp" type="range" min="0" max="10" value="0" class="w-full accent-emerald-500">
+        </div>
+      </div>
+      <div class="mb-3 grid grid-cols-2 gap-2">
+        <div>
+          <div class="mb-1 text-[10px] text-zinc-600">From</div>
+          <input id="am-new-from" type="time" value="08:00"
+                 class="w-full rounded-lg border border-zinc-700 bg-black/40 px-2 py-1 text-sm text-zinc-200 outline-none">
+        </div>
+        <div>
+          <div class="mb-1 text-[10px] text-zinc-600">To</div>
+          <input id="am-new-to" type="time" value="20:00"
+                 class="w-full rounded-lg border border-zinc-700 bg-black/40 px-2 py-1 text-sm text-zinc-200 outline-none">
+        </div>
+      </div>
+      <div class="flex gap-2">
+        <button onclick="submitCreateAutomation()"
+                class="flex-1 rounded-xl bg-emerald-500 py-1.5 text-xs font-semibold text-white hover:bg-emerald-400">
+          Create
+        </button>
+        <button onclick="document.getElementById('am-create-form').classList.add('hidden');document.getElementById('am-add-btn').classList.remove('hidden')"
+                class="rounded-xl border border-zinc-700 px-3 py-1.5 text-xs text-zinc-400 hover:border-zinc-500">
+          Cancel
+        </button>
+      </div>
+    </div>
+
+    {# Add button #}
+    <button id="am-add-btn"
+            onclick="document.getElementById('am-create-form').classList.remove('hidden');this.classList.add('hidden')"
+            class="mt-2 flex w-full items-center justify-center gap-1 rounded-xl border border-dashed border-zinc-700 py-2 text-xs text-zinc-500 hover:border-zinc-500 hover:text-zinc-400">
+      + New automation
+    </button>
+
+  </div>
+</div>

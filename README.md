@@ -1,140 +1,149 @@
 # AC Dash
 
-> **Docker (recommended)** — pull the latest image from GitHub Container Registry:
+> **Docker (recommended)** — pull from GitHub Container Registry:
 >
 > ```bash
 > docker pull ghcr.io/ajankuv/acdash:latest
 > ```
 >
-> [**All image tags**](https://github.com/ajankuv/acdash/pkgs/container/acdash) · [Portainer / compose](#deploy-with-portainer-or-similar) below.
+> [**All image tags**](https://github.com/ajankuv/acdash/pkgs/container/acdash) · [Deploy](#deploy)
 
-A **read-only** web dashboard for **AC Infinity** UIS controllers. It pulls the same live picture you get in the official app—**temperature**, **humidity**, **VPD**, and what’s happening on each **port**—and puts it in a browser tab on your computer or any device on your LAN.
+A web dashboard for **AC Infinity UIS controllers** that does everything the mobile app does on the cloud side — live sensor readings, history charts, port control, and automation management — from any browser on your LAN.
 
-The goal isn’t to replace the AC Infinity app for programming; it’s to **monitor** the environment you’re already controlling with their hardware. Think of the kind of at-a-glance grow-room view products like **Pulse Grow** offer, except here you’re not adding another sensor hub—you’re **reusing the controller and cloud data you already have**.
-
-I **vibe-coded** this for my own use: I kept opening my phone to check on the winter veggie garden I keep with my daughter. I wanted that same snapshot on a big screen, running in **Docker**, easy to manage in **Portainer**, and reachable from other machines on the network without another login flow every time. The UI uses **Tailwind** with a **dark theme** and is deliberately **in the spirit of AC Infinity’s app** (cards, hierarchy, calm greens)—not a pixel-perfect copy, but familiar enough that it feels like the same ecosystem.
+![AC Dash dashboard showing two controller cards for a veggie garden](docs/assets/dashboard-preview.png)
 
 ---
 
-## Credits
+## Why I built this
 
-The cloud API shape and a lot of the mental model (especially around VPD and sensor scaling) lean on community work. **Huge thanks to [LukeEvansTech/acinfinity-exporter](https://github.com/LukeEvansTech/acinfinity-exporter)**—that Prometheus exporter was the reference that made talking to the same HTTP API approachable. This project is a **dashboard**, not an exporter; same rough API family, different goal.
+I **vibe-coded** this for my own use. I kept opening my phone to check on the winter veggie garden I keep with my daughter. I wanted that same snapshot on a big screen, running in **Docker**, easy to manage in **Portainer**, and reachable from other machines on the network without another login flow every time. The UI uses **Tailwind** with a **dark theme** deliberately in the spirit of AC Infinity's app (cards, hierarchy, calm greens) — not a pixel-perfect copy, but familiar enough that it feels like the same ecosystem.
 
----
-
-## How your details are stored
-
-AC Dash needs your **AC Infinity cloud email and password** (the same ones as the mobile app) so it can call AC Infinity’s servers on your behalf.
-
-**After setup (default Docker layout):**
-
-- Credentials are written to a **single file** on disk: by default **`/app/data/.env`** inside the container (`ENV_FILE_PATH` overrides this).
-- That file holds `ACINFINITY_EMAIL` and `ACINFINITY_PASSWORD` in standard dotenv form.
-- **Nothing is sent to the author of this project** or to any third party except **AC Infinity’s own API** (`acinfinityserver.com`), same as the app.
-- **Mount a volume** on `/app/data` so a container recreate doesn’t wipe the file; otherwise you’ll see the setup wizard again.
-
-**Optional “headless” mode (Portainer / compose):**
-
-- Set **`ACDASH_USE_ENV_CREDENTIALS=1`** and provide **`ACINFINITY_EMAIL`** and **`ACINFINITY_PASSWORD`** in the container environment.
-- The wizard is skipped when those are present (and you’re not relying on a conflicting saved file—see `app/main.py` for the exact precedence).
-
-**Login transport:** acdash tries **form-body** login first (same as early releases and many community clients), then **query-string** login with **`fcmToken=Android_…`** like the Android Retrofit client—so either server behavior still works. To try query first instead: **`ACINFINITY_LOGIN_TRANSPORT=query`**. Optional: **`ACINFINITY_FCM_TOKEN`** (suffix after `Android_` or full `Android_…` string) for the query-style call.
-
-**Security hygiene:** don’t commit `.env`, don’t paste **debug JSON dumps** into public issues (they can include account fields, device IDs, Wi‑Fi names, etc.). This repo’s `.gitignore` is set up to steer clear of those.
+What started as a read-only monitor grew into a full dashboard once I reverse-engineered enough of the API to understand the write paths too.
 
 ---
 
-## Reverse-engineered API notes (important)
+## What it does
 
-AC Infinity does **not** publish a public HTTP spec for their cloud API. Everything below comes from **watching real responses**, comparing them to **equipment we could identify port-by-port in the app**, and cross-checking with the optional **full debug bundle** this dashboard can export.
+**Live monitoring**
+- Temperature, humidity, VPD, and port states for all your controllers
+- Trend arrows on sensor readings
+- Fan speed bars per port
+- Grow stage labels per controller (Seedling, Veg, Flower, Drying) — stored locally, not in the AC Infinity cloud
+- Fullscreen / TV mode for a wall display
+- Auto-refresh from 1 second to 60 seconds, or manual
 
-**What we figured out**
+**History charts**
+- Charts powered by a local SQLite database that collects one reading per controller every 60 seconds
+- AC Infinity's cloud only keeps ~30 days; local history is indefinite — leave the container running and it builds up automatically
+- Time windows from 6 hours to 30 days; falls back to the cloud API if local data doesn't cover the range yet
 
-- The live list endpoint (`devInfoListAll`) is a **snapshot**: great for “right now,” not historical graphs.
-- **On/off** for a load is **`loadState`**, not always the older **`state`** field—reading the wrong one made ports look blank.
-- **`loadType`** is meant to describe the **class** of device (fan, humidifier, light), but the list often shows **`0`** even when something is plugged in. The **`getDevSetting`** call for the same controller and port usually still returns the **real** non-zero `loadType`.
-- **`portResistance`** behaves like a **UIS electrical / detection fingerprint**: in testing we saw **stable** values for e.g. EC inline fans vs humidifier-class loads vs LED-class loads—with the same readings whether the load was idle or running (identity, not “motor on”). Exact numbers vary by hardware; see **`AC_INFINITY_FIELDS.md`** for the values we sampled.
-- **`deviceType`** was **`null`** everywhere in our samples, so it wasn’t useful for labeling gear.
+**Port control**
+- Click any port on a card to open a control modal
+- Supports all modes: **Manual** (on/off + speed), **VPD**, **Cycle**, **Schedule**, **Timer**, **Off**
+- Read-before-write: always fetches current settings before sending a change, so nothing gets silently overwritten
+- Confirm-once flow — one tap to review, one to execute
+- 1.5 s rate limit between writes to match the AC Infinity API's own enforcement
 
-**How we matched names to numbers**
-
-We labeled ports in the app, exported JSON, and compared **known device types** (fan, humidifier, light, etc.) to **`portResistance`** and **`getDevSetting.loadType`**. The same patterns showed up when comparing **one labeled setup to another** (e.g. **controller / tent A vs. controller / tent B**), which suggested the mapping wasn’t a single-location quirk. Fan **size** (e.g. smaller vs larger inline) did **not** show up as different `loadType` values—only **fan class**—so friendly names still come from **`portName`** in the app.
-
-**Honest limits**
-
-We don’t have every UIS SKU on the bench. **Other devices might share those numbers or use new ones.** The full write-up with tables lives in [**`AC_INFINITY_FIELDS.md`**](AC_INFINITY_FIELDS.md); treat it as **observed behavior**, not a guarantee from AC Infinity. If you discover new combinations, extending that doc helps everyone.
+**Automation management**
+- "Automations ›" button on each controller card lists all named automation programs
+- Toggle programs on/off, delete them, or create new ones
+- Port assignment uses the same bitmask encoding the official app uses
 
 ---
 
 ## Requirements
 
-- Docker (or any container runtime Portainer uses)
-- AC Infinity **cloud** login (same email/password as the mobile app)
+- Docker (or any container runtime — Portainer, Unraid, etc.)
+- AC Infinity cloud login (same email/password as the mobile app)
 
 ---
 
-## Run with Docker (local)
+## Deploy
 
-Persist the setup wizard’s saved credentials with a volume on **`/app/data`** (the app writes `ACINFINITY_EMAIL` / `ACINFINITY_PASSWORD` there after first login).
+### Local Docker
 
 ```bash
-docker build -t acdash:latest .
-
 docker run -d \
   --name acdash \
   -p 8080:8080 \
   -v acdash_data:/app/data \
   --restart unless-stopped \
-  acdash:latest
+  ghcr.io/ajankuv/acdash:latest
 ```
 
-Open **http://localhost:8080** (or `http://<your-machine>:8080` from another device on the LAN). First visit runs a **setup** form; after that you get the dashboard.
+Open **http://localhost:8080**. First visit shows a setup form; enter your AC Infinity credentials once and they're saved to the volume. After that it goes straight to the dashboard.
 
-**Health:** `GET /health` → `OK`
+### Portainer / compose
+
+Use the `docker-compose.yml` in this repo as a Portainer stack, or paste it into the Web editor:
+
+```yaml
+services:
+  acdash:
+    image: ghcr.io/ajankuv/acdash:latest
+    container_name: acdash
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    volumes:
+      - acdash_data:/app/data
+
+volumes:
+  acdash_data:
+```
+
+**To update:** pull and redeploy the stack. The `/app/data` volume keeps credentials and history across recreates.
+
+**Headless mode** (skip the setup wizard entirely): add these to the stack environment:
+
+```
+ACDASH_USE_ENV_CREDENTIALS=1
+ACINFINITY_EMAIL=you@example.com
+ACINFINITY_PASSWORD=yourpassword
+```
+
+### Environment variables
+
+| Variable | Default | What it does |
+|----------|---------|-------------|
+| `PORT` | `8080` | Listen port inside the container |
+| `CACHE_SECONDS` | `45` | How long to cache the live snapshot |
+| `COLLECTOR_INTERVAL_SECONDS` | `60` | How often to write a reading to the local history DB |
+| `HISTORY_DB_PATH` | `/app/data/history.db` | Path to the SQLite history file |
+| `HISTORY_CACHE_SECONDS` | `300` | How long to cache chart responses in memory |
+| `LOG_LEVEL` | `INFO` | `INFO` or `DEBUG` |
+| `ENV_FILE_PATH` | `/app/data/.env` | Where wizard-saved credentials are written |
+| `ACDASH_USE_ENV_CREDENTIALS` | — | Set to `1` to use `ACINFINITY_EMAIL`/`PASSWORD` from env instead of the wizard |
 
 ---
 
-## Deploy with Portainer (or similar)
+## Credentials and security
 
-1. **Image:** **`ghcr.io/ajankuv/acdash:latest`** ([package page](https://github.com/ajankuv/acdash/pkgs/container/acdash)) — or use **`docker-compose.yml`** in this repo as a stack. To update: **Pull and redeploy** the stack in Portainer. You can also **`docker build`** from this repo’s `Dockerfile` if you prefer a local image.
-2. **Port mapping:** container **`8080`** → host port of your choice (e.g. `8080`).
-3. **Volume:** bind mount or named volume **`/app/data`** so credentials survive container recreate.
-4. **Environment (optional):**
-   - `PORT` — listen port inside the container (default `8080`).
-   - `CACHE_SECONDS` — how long to cache the cloud snapshot (default `45`).
-   - `LOG_LEVEL` — e.g. `INFO`, `DEBUG`.
-   - **Headless / no wizard:** set `ACDASH_USE_ENV_CREDENTIALS=1` and provide `ACINFINITY_EMAIL` + `ACINFINITY_PASSWORD` in the stack env; leave `/app/data` empty or omit the wizard file if you want env to win.
-   - `COLLECTOR_INTERVAL_SECONDS` — how often (in seconds) to write a sensor reading to the local history DB (default `60`).
-   - `HISTORY_DB_PATH` — path inside the container for the SQLite history file (default `/app/data/history.db`).
-   - `HISTORY_CACHE_SECONDS` — how long to cache history chart responses in memory (default `300`).
+AC Dash needs your AC Infinity cloud email and password to call their API on your behalf.
 
-That’s enough to run it alongside the rest of your homelab and hit it from any browser on the network.
+- Credentials are written to **`/app/data/.env`** inside the container after the setup wizard. Mount a volume on `/app/data` so they survive container recreates.
+- **Nothing is sent to this project's author** or any third party. All traffic goes directly to `acinfinityserver.com` — the same server the mobile app talks to.
+- The AC Infinity API uses plain HTTP (not HTTPS) — this is on their end, not ours. Run AC Dash on a trusted network.
+- Don't paste the debug JSON dump (`/api/debug/ac-infinity-dump`) into public issues — it contains device IDs, Wi-Fi names, and account fields.
 
 ---
 
-## Persistent local history (SQLite)
+## API notes
 
-AC Infinity’s cloud API only keeps about **30 days of history**. Once a reading falls off that window it’s gone—there’s no way to pull it back.
+AC Infinity doesn't publish a public API spec. Everything here comes from watching real responses, comparing them to equipment identified port-by-port in the app, and cross-checking with the Jadx-decompiled Android client. Key findings are in [`AC_INFINITY_FIELDS.md`](AC_INFINITY_FIELDS.md) and the `RND/` directory.
 
-To get around this, AC Dash runs a **background collector** that writes one reading per controller to a local **SQLite database** every 60 seconds (configurable). The database lives at `/app/data/history.db` inside the container, which is the same volume you’re already mounting for credentials, so it survives container recreates automatically.
-
-When you load a history chart, AC Dash checks the local database first. If it has enough coverage for the requested time window it serves the chart from there instead of hitting the cloud API—which is faster and works for any range you’ve collected, even months or years back. If local data isn’t there yet (e.g. fresh install, or you’re requesting a window older than your collection started) it falls back to the AC Infinity API as normal.
-
-**Practical upshot:** leave the container running and you’ll build up an indefinite local history that outlasts whatever AC Infinity’s servers retain.
+Treat all of it as **observed behavior**, not a guarantee. If you find new device combinations, extending those docs helps everyone.
 
 ---
 
-## What it is / isn’t
+## Credits
 
-- **Is:** a **read-only** monitoring dashboard—it **displays** what the API returns; it doesn’t push setpoints or replace the official app for automation.
-- **Isn’t:** official AC Infinity software, a Pulse Grow competitor hardware-wise, a Prometheus exporter, or a complete map of every device type in the wild.
+The cloud API shape and VPD/sensor scaling model lean heavily on community work. Huge thanks to **[LukeEvansTech/acinfinity-exporter](https://github.com/LukeEvansTech/acinfinity-exporter)** — that Prometheus exporter was the reference that made talking to the same HTTP API approachable.
 
-Not affiliated with AC Infinity—just a project for a calm, big-screen environmental view without extra hardware in the room.
+Not affiliated with AC Infinity.
 
 ---
 
 ## License
 
-**MIT** — see [`LICENSE`](LICENSE).
-
-If you fork or ship this, keep the credit to **acinfinity-exporter** and respect AC Infinity’s terms for API use.
+**MIT** — see [`LICENSE`](LICENSE). If you fork or ship this, keep the credit to acinfinity-exporter and respect AC Infinity's terms for API use.
