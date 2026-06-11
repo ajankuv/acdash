@@ -375,6 +375,10 @@ async def api_port_control(request: Request) -> JSONResponse:
         "mode", "state", "speed", "on_speed", "off_speed",
         "vpd_target", "cycle_on_mins", "cycle_off_mins",
         "schedule_begin_mins", "schedule_end_mins", "timer_mins",
+        "auto_high_temp_enabled", "auto_low_temp_enabled",
+        "auto_high_humidity_enabled", "auto_low_humidity_enabled",
+        "auto_high_temp_c", "auto_low_temp_c",
+        "auto_high_humidity", "auto_low_humidity",
     ):
         if key in body:
             changes[key] = body[key]

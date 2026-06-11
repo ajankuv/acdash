@@ -35,6 +35,8 @@ _last_write_ts: float = float("-inf")  # sentinel: never written
 _SPEED_MIN, _SPEED_MAX = 0, 10
 _VPD_MIN_KPA, _VPD_MAX_KPA = 0.1, 3.0
 _MINS_MIN, _MINS_MAX = 1, 1439  # minutes from midnight / duration
+_TEMP_MIN_C, _TEMP_MAX_C = 0, 90       # devHt/devLt range (live API shows 90/194F cap)
+_HUMID_MIN, _HUMID_MAX = 0, 100
 
 
 def _clamp(value: int | float, lo: int | float, hi: int | float) -> int | float:
@@ -77,6 +79,7 @@ def build_mode_payload(
     Preserves AC Infinity API field name typos in output keys.
     VPD target is stored ×100 in the API (1.2 kPa → 120).
     Schedule times are minutes from midnight (0-1439).
+    Auto mode thresholds: devHt/devLt raw °C, devHh/devLh raw % (no ×100); devHtf/devLtf °F sent alongside.
     """
     merged = {**current, **changes}
     mode = str(merged.get("mode", "manual"))
@@ -152,6 +155,48 @@ def build_mode_payload(
             "offSpead": 0,
         }
 
+    if mode == "auto":
+        def _flag(key: str) -> int:
+            return 1 if merged.get(key) else 0
+
+        def _temp_c(key: str, default: float) -> float:
+            try:
+                return float(_clamp(float(merged.get(key, default)), _TEMP_MIN_C, _TEMP_MAX_C))
+            except (TypeError, ValueError):
+                raise ControlError(f"Invalid value for '{key}': expected a temperature in °C")
+
+        def _humid(key: str, default: int) -> int:
+            try:
+                return int(_clamp(int(merged.get(key, default)), _HUMID_MIN, _HUMID_MAX))
+            except (TypeError, ValueError):
+                raise ControlError(f"Invalid value for '{key}': expected a number 0–100")
+
+        active = {
+            "activeHt": _flag("auto_high_temp_enabled"),
+            "activeLt": _flag("auto_low_temp_enabled"),
+            "activeHh": _flag("auto_high_humidity_enabled"),
+            "activeLh": _flag("auto_low_humidity_enabled"),
+        }
+        if not any(active.values()):
+            raise ControlError("Enable at least one trigger (temperature or humidity)")
+
+        ht_c = _temp_c("auto_high_temp_c", 32.0)
+        lt_c = _temp_c("auto_low_temp_c", 0.0)
+        return {
+            **base,
+            "atType": AT_TYPE_AUTO,
+            **active,
+            # API expects both °C and °F variants (dalinicus HA integration sends both)
+            "devHt": int(round(ht_c)),
+            "devHtf": int(round(ht_c * 9 / 5 + 32)),
+            "devLt": int(round(lt_c)),
+            "devLtf": int(round(lt_c * 9 / 5 + 32)),
+            "devHh": _humid("auto_high_humidity", 75),
+            "devLh": _humid("auto_low_humidity", 40),
+            "onSpead": _speed("on_speed", 5),
+            "offSpead": _speed("off_speed", 0),
+        }
+
     raise ControlError(f"Unknown mode: {mode!r}")
 
 
@@ -176,6 +221,17 @@ def normalize_port_settings(raw_list: list[dict[str, Any]]) -> dict[str, Any]:
         "schedule_begin_mins": 480,
         "schedule_end_mins": 1200,
         "timer_mins": 60,
+        # Auto (temp/humidity trigger) mode — atType=3
+        "auto_high_temp_enabled": False,
+        "auto_low_temp_enabled": False,
+        "auto_high_humidity_enabled": False,
+        "auto_low_humidity_enabled": False,
+        "auto_high_temp_c": 32,
+        "auto_high_temp_f": 90,
+        "auto_low_temp_c": 0,
+        "auto_low_temp_f": 32,
+        "auto_high_humidity": 75,
+        "auto_low_humidity": 40,
     }
     if not raw_list:
         return defaults
@@ -220,6 +276,17 @@ def normalize_port_settings(raw_list: list[dict[str, Any]]) -> dict[str, Any]:
         "schedule_begin_mins": _raw_int(raw, "schedStartTime", default=defaults["schedule_begin_mins"]),
         "schedule_end_mins":   _raw_int(raw, "schedEndtTime",  default=defaults["schedule_end_mins"]),
         "timer_mins": _raw_int(raw, "acitveTimerOn", "acitveTimerOff", default=defaults["timer_mins"]),
+        # Auto mode triggers — thresholds are raw °C / raw % (confirmed live; no ×100)
+        "auto_high_temp_enabled": bool(_raw_int(raw, "activeHt", default=0)),
+        "auto_low_temp_enabled": bool(_raw_int(raw, "activeLt", default=0)),
+        "auto_high_humidity_enabled": bool(_raw_int(raw, "activeHh", default=0)),
+        "auto_low_humidity_enabled": bool(_raw_int(raw, "activeLh", default=0)),
+        "auto_high_temp_c": _raw_int(raw, "devHt", default=defaults["auto_high_temp_c"]),
+        "auto_high_temp_f": _raw_int(raw, "devHtf", default=defaults["auto_high_temp_f"]),
+        "auto_low_temp_c": _raw_int(raw, "devLt", default=defaults["auto_low_temp_c"]),
+        "auto_low_temp_f": _raw_int(raw, "devLtf", default=defaults["auto_low_temp_f"]),
+        "auto_high_humidity": _raw_int(raw, "devHh", default=defaults["auto_high_humidity"]),
+        "auto_low_humidity": _raw_int(raw, "devLh", default=defaults["auto_low_humidity"]),
     }
 
 

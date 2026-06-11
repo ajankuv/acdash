@@ -15,7 +15,7 @@
 
     {# Mode tabs #}
     <div class="mb-4 flex flex-wrap gap-1.5" id="pcm-mode-tabs">
-      {% for m in [("manual","Manual"),("vpd","VPD"),("cycle","Cycle"),("schedule","Schedule"),("timer","Timer"),("off","Off")] %}
+      {% for m in [("manual","Manual"),("auto","Auto"),("vpd","VPD"),("cycle","Cycle"),("schedule","Schedule"),("timer","Timer"),("off","Off")] %}
         <button
           data-mode="{{ m[0] }}"
           onclick="pcmSelectMode('{{ m[0] }}')"
@@ -25,10 +25,10 @@
       {% endfor %}
     </div>
 
-    {# Auto-mode info banner — shown when port is in temp/humidity auto mode (atType=3) #}
+    {# Unknown-mode info banner — shown when port is in a mode this dashboard can't edit #}
     <div id="pcm-auto-info"
          class="mb-3 hidden rounded-lg bg-amber-900/40 px-3 py-2 text-xs text-amber-300 ring-1 ring-amber-800/60">
-      Port is in Auto (Temp/Humidity) mode — not editable here. Pick a mode below to switch it.
+      Port is in a mode this dashboard can't edit yet. Pick a mode below to switch it.
     </div>
 
     {# Error banner #}
@@ -52,6 +52,71 @@
         </div>
         <input id="pcm-speed" type="range" min="1" max="10" value="5"
                oninput="document.getElementById('pcm-speed-val').textContent=this.value"
+               class="w-full accent-emerald-500">
+      </div>
+    </div>
+
+    {# ── Auto (temp/humidity triggers) ── #}
+    <div id="pcm-section-auto" class="pcm-section hidden">
+      <div class="mb-1.5 text-[10px] font-semibold uppercase tracking-wider text-zinc-500">Triggers</div>
+      <div class="mb-2 flex items-center justify-between gap-2">
+        <label class="flex items-center gap-2 text-xs text-zinc-400">
+          <input id="pcm-auto-ht-on" type="checkbox" class="accent-emerald-500">
+          Temp above
+        </label>
+        <div class="flex items-center gap-1">
+          <input id="pcm-auto-ht" type="number" step="1"
+                 class="w-16 rounded-lg border border-zinc-700 bg-black/40 px-2 py-1 text-center text-sm font-semibold text-zinc-200 outline-none">
+          <span class="pcm-auto-unit text-[10px] text-zinc-500">°F</span>
+        </div>
+      </div>
+      <div class="mb-2 flex items-center justify-between gap-2">
+        <label class="flex items-center gap-2 text-xs text-zinc-400">
+          <input id="pcm-auto-lt-on" type="checkbox" class="accent-emerald-500">
+          Temp below
+        </label>
+        <div class="flex items-center gap-1">
+          <input id="pcm-auto-lt" type="number" step="1"
+                 class="w-16 rounded-lg border border-zinc-700 bg-black/40 px-2 py-1 text-center text-sm font-semibold text-zinc-200 outline-none">
+          <span class="pcm-auto-unit text-[10px] text-zinc-500">°F</span>
+        </div>
+      </div>
+      <div class="mb-2 flex items-center justify-between gap-2">
+        <label class="flex items-center gap-2 text-xs text-zinc-400">
+          <input id="pcm-auto-hh-on" type="checkbox" class="accent-emerald-500">
+          Humidity above
+        </label>
+        <div class="flex items-center gap-1">
+          <input id="pcm-auto-hh" type="number" min="0" max="100" step="1"
+                 class="w-16 rounded-lg border border-zinc-700 bg-black/40 px-2 py-1 text-center text-sm font-semibold text-zinc-200 outline-none">
+          <span class="text-[10px] text-zinc-500">%</span>
+        </div>
+      </div>
+      <div class="mb-3 flex items-center justify-between gap-2">
+        <label class="flex items-center gap-2 text-xs text-zinc-400">
+          <input id="pcm-auto-lh-on" type="checkbox" class="accent-emerald-500">
+          Humidity below
+        </label>
+        <div class="flex items-center gap-1">
+          <input id="pcm-auto-lh" type="number" min="0" max="100" step="1"
+                 class="w-16 rounded-lg border border-zinc-700 bg-black/40 px-2 py-1 text-center text-sm font-semibold text-zinc-200 outline-none">
+          <span class="text-[10px] text-zinc-500">%</span>
+        </div>
+      </div>
+      <div class="mb-3">
+        <div class="mb-1 flex justify-between text-[10px] font-semibold uppercase tracking-wider text-zinc-500">
+          <span>Triggered speed</span><span id="pcm-auto-on-sp-val" class="text-emerald-400">5</span>
+        </div>
+        <input id="pcm-auto-on-sp" type="range" min="1" max="10" value="5"
+               oninput="document.getElementById('pcm-auto-on-sp-val').textContent=this.value"
+               class="w-full accent-emerald-500">
+      </div>
+      <div>
+        <div class="mb-1 flex justify-between text-[10px] font-semibold uppercase tracking-wider text-zinc-500">
+          <span>Idle speed</span><span id="pcm-auto-off-sp-val" class="text-zinc-400">0</span>
+        </div>
+        <input id="pcm-auto-off-sp" type="range" min="0" max="10" value="0"
+               oninput="document.getElementById('pcm-auto-off-sp-val').textContent=this.value"
                class="w-full accent-emerald-500">
       </div>
     </div>
