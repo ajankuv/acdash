@@ -378,6 +378,7 @@ async def api_port_control(request: Request) -> JSONResponse:
         "auto_high_temp_enabled", "auto_low_temp_enabled",
         "auto_high_humidity_enabled", "auto_low_humidity_enabled",
         "auto_high_temp_c", "auto_low_temp_c",
+        "auto_high_temp_f", "auto_low_temp_f",
         "auto_high_humidity", "auto_low_humidity",
     ):
         if key in body:

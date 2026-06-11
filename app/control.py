@@ -1,6 +1,7 @@
 """Write operations for AC Infinity ports and automation programs."""
 from __future__ import annotations
 
+import math
 import time
 from typing import TYPE_CHECKING, Any
 
@@ -36,6 +37,7 @@ _SPEED_MIN, _SPEED_MAX = 0, 10
 _VPD_MIN_KPA, _VPD_MAX_KPA = 0.1, 3.0
 _MINS_MIN, _MINS_MAX = 1, 1439  # minutes from midnight / duration
 _TEMP_MIN_C, _TEMP_MAX_C = 0, 90       # devHt/devLt range (live API shows 90/194F cap)
+_TEMP_MIN_F, _TEMP_MAX_F = 32, 194     # devHtf/devLtf — same bounds in °F
 _HUMID_MIN, _HUMID_MAX = 0, 100
 
 
@@ -147,6 +149,16 @@ def build_mode_payload(
         }
 
     if mode == "timer":
+        # Preserve the timer variant: atType=5 (stay off, then on) must not be
+        # silently rewritten as atType=4 (run, then off) on an unchanged save.
+        if str(merged.get("timer_variant", "on")) == "off":
+            return {
+                **base,
+                "atType": AT_TYPE_TIMER_OFF,
+                "acitveTimerOff": _mins("timer_mins", 60),  # API typo
+                "onSpead": _speed("speed", 7),
+                "offSpead": 0,
+            }
         return {
             **base,
             "atType": AT_TYPE_TIMER_ON,
@@ -161,7 +173,10 @@ def build_mode_payload(
 
         def _temp_c(key: str, default: float) -> float:
             try:
-                return float(_clamp(float(merged.get(key, default)), _TEMP_MIN_C, _TEMP_MAX_C))
+                v = float(merged.get(key, default))
+                if not math.isfinite(v):  # bare NaN/Infinity is valid JSON to json.loads
+                    raise ValueError
+                return float(_clamp(v, _TEMP_MIN_C, _TEMP_MAX_C))
             except (TypeError, ValueError):
                 raise ControlError(f"Invalid value for '{key}': expected a temperature in °C")
 
@@ -180,17 +195,38 @@ def build_mode_payload(
         if not any(active.values()):
             raise ControlError("Enable at least one trigger (temperature or humidity)")
 
-        ht_c = _temp_c("auto_high_temp_c", 32.0)
-        lt_c = _temp_c("auto_low_temp_c", 0.0)
+        def _temp_pair(c_key: str, f_key: str, default_c: float) -> tuple[int, int]:
+            """(devHt, devHtf) pair. An explicitly sent °F wins (exact round-trip for
+            °F-mode users); otherwise derive °F from °C — but keep the device-stored
+            °F when the °C value is unchanged, so a no-op °C-mode save doesn't drift
+            the app's °F display by ±1 (e.g. stored 27°C/80°F would re-derive as 81°F).
+            """
+            if f_key in changes:
+                try:
+                    fv = float(changes[f_key])
+                    if not math.isfinite(fv):
+                        raise ValueError
+                    f = int(round(_clamp(fv, _TEMP_MIN_F, _TEMP_MAX_F)))
+                except (TypeError, ValueError):
+                    raise ControlError(f"Invalid value for '{f_key}': expected a temperature in °F")
+                return int(round((f - 32) * 5 / 9)), f
+            c = _temp_c(c_key, default_c)
+            cur_c, cur_f = current.get(c_key), current.get(f_key)
+            if cur_c is not None and cur_f is not None and int(round(c)) == int(cur_c):
+                return int(round(c)), int(cur_f)
+            return int(round(c)), int(round(c * 9 / 5 + 32))
+
+        ht_c, ht_f = _temp_pair("auto_high_temp_c", "auto_high_temp_f", 32.0)
+        lt_c, lt_f = _temp_pair("auto_low_temp_c", "auto_low_temp_f", 0.0)
         return {
             **base,
             "atType": AT_TYPE_AUTO,
             **active,
             # API expects both °C and °F variants (dalinicus HA integration sends both)
-            "devHt": int(round(ht_c)),
-            "devHtf": int(round(ht_c * 9 / 5 + 32)),
-            "devLt": int(round(lt_c)),
-            "devLtf": int(round(lt_c * 9 / 5 + 32)),
+            "devHt": ht_c,
+            "devHtf": ht_f,
+            "devLt": lt_c,
+            "devLtf": lt_f,
             "devHh": _humid("auto_high_humidity", 75),
             "devLh": _humid("auto_low_humidity", 40),
             "onSpead": _speed("on_speed", 5),
@@ -221,6 +257,7 @@ def normalize_port_settings(raw_list: list[dict[str, Any]]) -> dict[str, Any]:
         "schedule_begin_mins": 480,
         "schedule_end_mins": 1200,
         "timer_mins": 60,
+        "timer_variant": "on",  # "on"=atType 4 (run then off), "off"=atType 5 (wait then on)
         # Auto (temp/humidity trigger) mode — atType=3
         "auto_high_temp_enabled": False,
         "auto_low_temp_enabled": False,
@@ -275,7 +312,14 @@ def normalize_port_settings(raw_list: list[dict[str, Any]]) -> dict[str, Any]:
         "cycle_off_mins":     _raw_int(raw, "activeCycleOff", default=defaults["cycle_off_mins"]),
         "schedule_begin_mins": _raw_int(raw, "schedStartTime", default=defaults["schedule_begin_mins"]),
         "schedule_end_mins":   _raw_int(raw, "schedEndtTime",  default=defaults["schedule_end_mins"]),
-        "timer_mins": _raw_int(raw, "acitveTimerOn", "acitveTimerOff", default=defaults["timer_mins"]),
+        # Timer duration lives in acitveTimerOff for atType=5 (the unused field is 0,
+        # not None, so key order matters — pick per variant).
+        "timer_mins": (
+            _raw_int(raw, "acitveTimerOff", "acitveTimerOn", default=defaults["timer_mins"])
+            if at_type == AT_TYPE_TIMER_OFF
+            else _raw_int(raw, "acitveTimerOn", "acitveTimerOff", default=defaults["timer_mins"])
+        ),
+        "timer_variant": "off" if at_type == AT_TYPE_TIMER_OFF else "on",
         # Auto mode triggers — thresholds are raw °C / raw % (confirmed live; no ×100)
         "auto_high_temp_enabled": bool(_raw_int(raw, "activeHt", default=0)),
         "auto_low_temp_enabled": bool(_raw_int(raw, "activeLt", default=0)),
