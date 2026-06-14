@@ -239,12 +239,44 @@ class ACInfinityClient:
             {"devId": str(dev_id), "port": port},
         )
 
-    def set_port_mode(self, dev_id: str | int, port: int, payload: dict[str, Any]) -> dict[str, Any] | None:
-        """POST dev/addDevMode — write port mode settings. Full payload required (read-before-write)."""
-        return self._post_with_token(
-            ADD_DEV_MODE_ENDPOINT,
-            {**payload, "devId": str(dev_id), "port": int(port)},
-        )
+    def set_port_mode(
+        self, dev_id: str | int, port: int, payload: dict[str, Any], *, _retry: bool = True
+    ) -> dict[str, Any] | None:
+        """POST dev/addDevMode — write port mode settings.
+
+        Matches the AC Infinity app / dalinicus client: parameters go in the **query
+        string** (this endpoint is a Retrofit @QueryMap, not a form body) and a
+        ``User-Agent`` is sent. The ``payload`` is the COMPLETE settings record with the
+        changed fields overlaid (built by control.build_write_payload) — a partial body
+        is what the API rejects with code 999999.
+        """
+        params = {**payload, "devId": str(dev_id), "externalPort": int(port)}
+        if not self.token and not self.authenticate():
+            return None
+        try:
+            response = self._client.post(
+                ADD_DEV_MODE_ENDPOINT,
+                params=params,
+                headers={"token": self.token, "User-Agent": "okhttp/4.12.0"},
+            )
+        except httpx.HTTPError as e:
+            logger.error("POST %s failed: %s", ADD_DEV_MODE_ENDPOINT, e)
+            return None
+
+        if response.status_code == 401:
+            logger.warning("Token expired, re-authenticating")
+            self.token = None
+            if _retry and self.authenticate():
+                return self.set_port_mode(dev_id, port, payload, _retry=False)
+            return None
+
+        try:
+            response.raise_for_status()
+            parsed: dict[str, Any] = response.json()
+        except (httpx.HTTPError, ValueError) as e:
+            logger.error("Request to %s: bad response: %s", ADD_DEV_MODE_ENDPOINT, e)
+            return None
+        return parsed
 
     def get_automations_raw(self, dev_id: str | int) -> list[dict[str, Any]]:
         """POST version=2.0/dev/getGroups — raw named automation program list."""

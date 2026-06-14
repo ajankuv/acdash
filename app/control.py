@@ -1,6 +1,7 @@
 """Write operations for AC Infinity ports and automation programs."""
 from __future__ import annotations
 
+import json
 import math
 import time
 from typing import TYPE_CHECKING, Any
@@ -339,12 +340,48 @@ def read_port_settings(
 ) -> dict[str, Any]:
     """Fetch current port mode settings. Always called before any write (read-before-write)."""
     raw = client.get_dev_mode_setting_list(dev_id, port)
-    if raw and isinstance(raw, dict) and raw.get("code") == 200:
-        data = raw.get("data") or []
-        if isinstance(data, dict):
-            data = [data]
-        return normalize_port_settings(data)
-    return normalize_port_settings([])
+    return normalize_port_settings([_raw_record(raw)] if _raw_record(raw) else [])
+
+
+def _raw_record(body: dict[str, Any] | None) -> dict[str, Any]:
+    """Pull the full settings record from a getdevModeSettingList response.
+
+    The real API returns ``data`` as a dict; mocks/older shapes may use a 1-item list.
+    Returns {} on any failure so callers can detect a missing record.
+    """
+    if not body or not isinstance(body, dict) or body.get("code") != 200:
+        return {}
+    data = body.get("data")
+    if isinstance(data, list):
+        data = data[0] if data else {}
+    return data if isinstance(data, dict) else {}
+
+
+def build_write_payload(
+    raw_record: dict[str, Any], overlay: dict[str, Any]
+) -> dict[str, Any]:
+    """Full read-modify-write payload for addDevMode (mirrors the dalinicus HA client).
+
+    AC Infinity's addDevMode rejects a PARTIAL payload with the generic error code
+    999999. The working recipe is to echo the COMPLETE current settings record back
+    with only the changed fields overlaid. Serialize like the app does:
+      - None        → 0
+      - dict / list → compact JSON string (e.g. the nested ``devSetting`` object)
+      - bool        → "true" / "false"
+      - everything else passes through unchanged.
+    """
+    merged = {**(raw_record or {}), **overlay}
+    out: dict[str, Any] = {}
+    for k, v in merged.items():
+        if v is None:
+            out[k] = 0
+        elif isinstance(v, (dict, list)):
+            out[k] = json.dumps(v, separators=(",", ":"))
+        elif isinstance(v, bool):
+            out[k] = str(v).lower()
+        else:
+            out[k] = v
+    return out
 
 
 def write_port_control(
@@ -360,19 +397,22 @@ def write_port_control(
         ControlError: if API rejects the command
     """
     _rate_limit()
-    current = read_port_settings(client, dev_id, port)
-    payload = build_mode_payload(dev_id, port, current, changes)
+    # Read the FULL current record (not just the normalized view) so the write can
+    # echo every field back — addDevMode rejects partial payloads with code 999999.
+    raw_body = client.get_dev_mode_setting_list(dev_id, port)
+    raw_record = _raw_record(raw_body)
+    current = normalize_port_settings([raw_record] if raw_record else [])
+    overlay = build_mode_payload(dev_id, port, current, changes)
+    payload = build_write_payload(raw_record, overlay)
     result = client.set_port_mode(dev_id, port, payload)
     if result is None:
         raise ControlError("Could not reach AC Infinity — check your connection")
     if not isinstance(result, dict):
         return
     code = result.get("code")
-    if code == 999999:
-        raise ControlError(
-            "Port is under active automation — disable it in the AC Infinity app first"
-        )
     if code is not None and code != 200:
+        # 999999 is a generic "operation failed" from the API (not specifically an
+        # automation lock) — surface whatever message the server returned.
         msg = str(result.get("msg") or "")
         raise ControlError(f"AC Infinity rejected the command: {msg}" if msg else "Command failed")
 
