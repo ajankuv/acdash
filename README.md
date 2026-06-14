@@ -39,10 +39,12 @@ What started as a read-only monitor grew into a full dashboard once I reverse-en
 
 **Port control**
 - Click any port on a card to open a control modal
-- Supports all modes: **Manual** (on/off + speed), **VPD**, **Cycle**, **Schedule**, **Timer**, **Off**
-- Read-before-write: always fetches current settings before sending a change, so nothing gets silently overwritten
+- Supports all modes: **Manual** (on/off + speed), **Auto** (temperature/humidity triggers), **VPD**, **Cycle**, **Schedule**, **Timer**, **Off**
+- **Auto mode**: set high/low temperature and humidity trigger thresholds (in your chosen °C/°F unit) plus the triggered and idle fan speeds — the same temp/humidity trigger the official app calls Auto
+- Read-before-write: fetches the full current settings record first and echoes it back with your changes overlaid, so nothing gets silently overwritten (a partial payload is what the AC Infinity API rejects)
 - Confirm-once flow — one tap to review, one to execute
 - 1.5 s rate limit between writes to match the AC Infinity API's own enforcement
+- Note: after changing a port's **mode**, the cloud reports the new mode on a short device-check-in delay, so the card may show the previous mode for one refresh cycle before it catches up (threshold and speed values update immediately)
 
 **Automation management**
 - "Automations ›" button on each controller card lists all named automation programs
