@@ -1477,7 +1477,11 @@
       var vid = data.verify_id;
       var poll = function () {
         fetch('/api/port-control/verify?id=' + encodeURIComponent(vid), {credentials: 'same-origin', cache: 'no-store'})
-          .then(function (r) { return r.json(); })
+          .then(function (r) {
+            // 404 = result gone (container restarted / evicted), 401 = signed out: stop polling.
+            if (!r.ok) return {status: 'unavailable'};
+            return r.json();
+          })
           .then(function (v) {
             if (v.status === 'applied') {
               pcmToast('ok', label + ': applied', 'The controller confirmed the change.');
@@ -1487,6 +1491,11 @@
               if (window.acdashRefresh) window.acdashRefresh();
             } else if (v.status === 'pending') {
               setTimeout(poll, 5000);
+            } else if (v.status === 'unconfirmed') {
+              pcmToast('info', label + ': sent', v.hint || 'The change was sent but could not be confirmed.');
+              if (window.acdashRefresh) window.acdashRefresh();
+            } else {
+              pcmToast('info', label + ': sent', 'The change was sent, but its result can no longer be checked.');
             }
           })
           .catch(function () { setTimeout(poll, 10000); });

@@ -212,12 +212,26 @@ def test_writes_spaced_across_threads():
     assert api.count("/dev/addDevMode") == 1
 
 
-def test_noop_write_not_sent():
+def test_noop_write_not_sent_when_live_state_matches():
     api = FakeAPI()
     api.queue("/dev/getdevModeSettingList", (200, {"code": 200, "data": full_record(atType=2, onSpead=7)}))
-    out = write_port_control(make_client(api), "1", 1, {"mode": "manual", "state": True, "speed": 7})
+    live = {"port": 1, "speak": 7, "loadState": 1, "curMode": 2}
+    out = write_port_control(make_client(api), "1", 1, {"mode": "manual", "state": True, "speed": 7}, live_port=live)
     assert out["status"] == "no_change"
     assert api.count("/dev/addDevMode") == 0
+
+
+@pytest.mark.parametrize("live", [
+    {"port": 1, "speak": 5, "loadState": 1, "curMode": 2},   # HA #166: cloud says 7, device runs 5
+    {"port": 1, "speak": 7, "loadState": 1},                 # no live mode reported → can't be sure
+    None,                                                    # live read failed
+])
+def test_same_settings_resent_unless_live_confirms(live):
+    api = FakeAPI()
+    api.queue("/dev/getdevModeSettingList", (200, {"code": 200, "data": full_record(atType=2, onSpead=7)}))
+    out = write_port_control(make_client(api), "1", 1, {"mode": "manual", "state": True, "speed": 7}, live_port=live)
+    assert out["status"] == "sent"
+    assert api.count("/dev/addDevMode") == 1
 
 
 def test_is_noop_detects_change():
@@ -313,6 +327,40 @@ def test_verify_off():
     assert verify.get_result(vid)["status"] == "applied"
 
 
+def test_verify_ambiguous_off_is_unconfirmed_without_mode():
+    # Port was idling at 0 under Auto; Off requested; live data has no curMode → can't tell.
+    base = {"port": 1, "speak": 0, "loadState": 0}
+    c = LiveClient([[{"devId": "1", "deviceInfo": {"ports": [base]}}]])
+    vid = verify.start(c, "1", 1, {"atType": 1, "speed": 0}, fmt="query", baseline=base, window=0,
+                       sleep=lambda s: None, run_async=False)
+    assert verify.get_result(vid)["status"] == "unconfirmed"
+
+
+def test_verify_ambiguous_off_applied_when_mode_changes():
+    base = {"port": 1, "speak": 0, "loadState": 0, "curMode": 3}
+    c = LiveClient([_dev(0, 0, 3), _dev(0, 0, 1)])
+    vid = verify.start(c, "1", 1, {"atType": 1, "speed": 0}, fmt="query", baseline=base, window=60, poll=10,
+                       sleep=lambda s: None, run_async=False)
+    assert verify.get_result(vid)["status"] == "applied"
+
+
+def test_verify_ambiguous_ignored_is_not_applied():
+    base = {"port": 1, "speak": 0, "loadState": 0, "curMode": 3}
+    c = LiveClient([_dev(0, 0, 3)])  # stays in Auto: the Off write was ignored
+    vid = verify.start(c, "1", 1, {"atType": 1, "speed": 0}, fmt="query", baseline=base, window=0,
+                       sleep=lambda s: None, run_async=False)
+    assert verify.get_result(vid)["status"] == "not_applied"
+
+
+def test_verify_waits_one_poll_before_judging_ambiguous():
+    sleeps = []
+    base = {"port": 1, "speak": 7, "loadState": 1, "curMode": 2}
+    c = LiveClient([_dev(7, 1, 2)])
+    verify.start(c, "1", 1, {"atType": 2, "speed": 7}, fmt="query", baseline=base, window=60, poll=10,
+                 sleep=sleeps.append, run_async=False)
+    assert sleeps and sleeps[0] == 10
+
+
 def test_verify_results_bounded():
     c = LiveClient([_dev(0, 0, 1)])
     ids = [verify.start(c, "1", 1, {"atType": 1}, fmt="q", window=0, sleep=lambda s: None, run_async=False)
@@ -386,6 +434,8 @@ def test_port_control_route_returns_pending_with_ok(routes):
 
 def test_port_control_route_no_change(routes):
     tc, api, started = routes
+    api.queue("/user/devInfoListAll", (200, {"code": 200, "data": [{"devId": "1", "deviceInfo": {"ports": [
+        {"port": 1, "speak": 7, "loadState": 1, "curMode": 2}]}}]}))
     api.queue("/dev/getdevModeSettingList", (200, {"code": 200, "data": full_record(atType=2, onSpead=7)}))
     r = tc.post("/api/port-control", json={"dev_id": "1", "port": 1, "mode": "manual", "state": True, "speed": 7})
     assert r.json() == {"ok": True, "status": "no_change", "format": "query"}

@@ -560,8 +560,14 @@ def write_port_control(
     changes: dict[str, Any],
     *,
     restore_record: dict[str, Any] | None = None,
+    live_port: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Apply port control changes (or restore a snapshot). Read-before-write, spaced, snapshotted.
+
+    ``live_port`` is the port's live ``devInfoListAll`` entry taken just before the write. A write
+    is only skipped as ``no_change`` when the stored settings already match AND the live port
+    already shows that state — if the cloud stored a value the controller ignored (HA #166),
+    re-sending the same settings must still go out.
 
     Returns ``{"status": "sent" | "no_change", "format", "expected"}``; verification of the
     live device state is done separately (app.verify).
@@ -596,8 +602,12 @@ def write_port_control(
             overlay = build_mode_payload(dev_id, port, current, changes)
 
         fmt = get_write_format()
-        if is_noop(raw_record, overlay):
-            return {"status": "no_change", "format": fmt, "expected": expected_state({**raw_record, **overlay})}
+        expected = expected_state({**raw_record, **overlay})
+        if is_noop(raw_record, overlay) and live_port is not None:
+            from app.verify import port_matches
+
+            if port_matches(live_port, expected, strict=True):
+                return {"status": "no_change", "format": fmt, "expected": expected}
 
         dev_type = getattr(client, "_dev_types", {}).get(str(dev_id))
         payload = build_write_payload(raw_record, overlay, fmt, dev_type=dev_type)

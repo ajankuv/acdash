@@ -53,6 +53,10 @@ def get_result(vid: str) -> dict[str, Any] | None:
         return dict(r) if r else None
 
 
+def live_port(devices: list[dict[str, Any]], dev_id: str, port: int) -> dict[str, Any] | None:
+    return _live_port(devices, dev_id, port)
+
+
 def _live_port(devices: list[dict[str, Any]], dev_id: str, port: int) -> dict[str, Any] | None:
     for d in devices or []:
         if str(d.get("devId")) != str(dev_id):
@@ -73,16 +77,26 @@ def _int(v: Any) -> int | None:
         return None
 
 
-def port_matches(live: dict[str, Any], expected: dict[str, Any]) -> bool:
+def port_matches(live: dict[str, Any], expected: dict[str, Any], *, strict: bool = False) -> bool:
+    """Does the live port look like ``expected``?
+
+    ``strict`` also requires the live mode (``curMode``) to be reported and equal the requested
+    ``atType`` — used when speed alone is ambiguous (e.g. Off requested for a port that was
+    already idling at 0 under Auto).
+    """
     at_type = expected.get("atType")
     speed = _int(live.get("speak"))
+    mode = _int(live.get("curMode"))
     if at_type == 1:  # Off
         load = _int(live.get("loadState"))
-        return speed == 0 or load == 0
-    if at_type == 2:  # Manual On
-        return speed is not None and speed == expected.get("speed")
-    mode = _int(live.get("curMode"))
-    return mode is not None and mode == at_type
+        ok = speed == 0 or load == 0
+    elif at_type == 2:  # Manual On
+        ok = speed is not None and speed == expected.get("speed")
+    else:
+        return mode is not None and mode == at_type
+    if ok and strict:
+        return mode is not None and mode == at_type
+    return ok
 
 
 def start(
@@ -92,6 +106,7 @@ def start(
     expected: dict[str, Any],
     *,
     fmt: str,
+    baseline: dict[str, Any] | None = None,
     on_done: Callable[[], None] | None = None,
     window: float | None = None,
     poll: float = POLL_SECONDS,
@@ -104,10 +119,19 @@ def start(
     _store(vid, {"status": "pending", "dev_id": dev_id, "port": port, "expected": expected, "format": fmt,
                  "started": time.time()})
 
+    # If the port already looked like the target before the write, a speed match proves
+    # nothing — require the live mode too, and say "unconfirmed" rather than "applied" if the
+    # API gives us no way to tell.
+    ambiguous = baseline is not None and port_matches(baseline, expected)
+
     def run() -> None:
         deadline = time.monotonic() + window
         last_live: dict[str, Any] | None = None
+        first = True
         while True:
+            if not first or ambiguous:
+                sleep(poll)  # give the controller a check-in before judging an ambiguous write
+            first = False
             try:
                 live = _live_port(client.get_devices(), dev_id, port)
             except Exception:  # noqa: BLE001 — keep polling; report at the end
@@ -115,15 +139,22 @@ def start(
                 live = None
             if live is not None:
                 last_live = live
-                if port_matches(live, expected):
+                if port_matches(live, expected, strict=ambiguous):
                     _store(vid, {**(get_result(vid) or {}), "status": "applied", "live": _summary(live)})
                     break
             if time.monotonic() + poll > deadline:
-                _store(vid, {**(get_result(vid) or {}), "status": "not_applied",
-                             "live": _summary(last_live) if last_live else None,
-                             "hint": _hint(fmt)})
+                if (ambiguous and last_live is not None and port_matches(last_live, expected)
+                        and _int(last_live.get("curMode")) is None):
+                    # No live mode reported: genuinely can't tell (a known, wrong mode is not_applied).
+                    _store(vid, {**(get_result(vid) or {}), "status": "unconfirmed",
+                                 "live": _summary(last_live),
+                                 "hint": "The port already looked like this before the change, so the "
+                                         "controller's live state can't confirm it."})
+                else:
+                    _store(vid, {**(get_result(vid) or {}), "status": "not_applied",
+                                 "live": _summary(last_live) if last_live else None,
+                                 "hint": _hint(fmt)})
                 break
-            sleep(poll)
         if on_done:
             try:
                 on_done()

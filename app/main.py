@@ -419,7 +419,13 @@ def _write_and_verify(
     ``no_change``), ``verify_id`` and ``format``.
     """
     try:
-        out = write_port_control(client, dev_id, port, changes, restore_record=restore_record)
+        baseline = verify.live_port(client.get_devices(), dev_id, port)
+    except Exception:  # noqa: BLE001 — verification degrades, the write still goes out
+        logger.debug("pre-write live read failed", exc_info=True)
+        baseline = None
+    try:
+        out = write_port_control(client, dev_id, port, changes, restore_record=restore_record,
+                                 live_port=baseline)
     except RateLimitError as e:
         return JSONResponse({"error": str(e)}, status_code=429)
     except ControlError as e:
@@ -428,7 +434,7 @@ def _write_and_verify(
     if out.get("status") == "no_change":
         return JSONResponse({"ok": True, "status": "no_change", "format": out.get("format")})
     vid = verify.start(client, dev_id, port, out.get("expected") or {}, fmt=str(out.get("format")),
-                       on_done=_clear_cache)
+                       baseline=baseline, on_done=_clear_cache)
     return JSONResponse({"ok": True, "status": "pending", "verify_id": vid, "format": out.get("format"),
                          "verify_seconds": verify.verify_window_seconds()})
 

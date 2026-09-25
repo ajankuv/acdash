@@ -20,6 +20,19 @@ def _cred_key(email: str, password: str) -> tuple[str, str]:
     return email, hashlib.sha256(password.encode("utf-8")).hexdigest()
 
 
+# Other threads (requests, collector, backfill, verifier) may still be mid-request on a
+# replaced client; closing it immediately makes those calls raise. Close it a bit later.
+RETIRE_DELAY_SECS = 120.0
+
+
+def _retire(old: ACInfinityClient | None) -> None:
+    if old is None:
+        return
+    t = threading.Timer(RETIRE_DELAY_SECS, old.close)
+    t.daemon = True
+    t.start()
+
+
 def get_client(email: str, password: str) -> ACInfinityClient:
     """Shared client for these credentials; replaced (old one closed) if credentials change."""
     global _client, _key
@@ -29,8 +42,7 @@ def get_client(email: str, password: str) -> ACInfinityClient:
             old = _client
             _client = ACInfinityClient(email, password)
             _key = key
-            if old is not None:
-                old.close()
+            _retire(old)
         return _client
 
 
@@ -39,5 +51,4 @@ def reset_client() -> None:
     global _client, _key
     with _lock:
         old, _client, _key = _client, None, None
-    if old is not None:
-        old.close()
+    _retire(old)

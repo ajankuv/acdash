@@ -293,6 +293,7 @@ class ACInfinityClient:
         headers: dict[str, str] | None = None,
         header_fn: Any = None,
         retry_on_expired: bool = True,
+        retry_on_rate_limit: bool | None = None,
         timeout: float | None = None,
     ) -> dict[str, Any] | None:
         """POST with the session token; handles expiry and ``999998`` rate limiting.
@@ -303,10 +304,12 @@ class ACInfinityClient:
         - ``999998`` → wait ``RATE_LIMIT_BACKOFF_SECS`` and retry once.
         Returns the parsed JSON body, or None on network/HTTP/JSON failure.
         """
+        if retry_on_rate_limit is None:
+            retry_on_rate_limit = retry_on_expired  # writes opt out of both automatic resends
         if not self._ensure_token():
             return None
         expired_retried = False
-        rate_retried = False
+        rate_retried = not retry_on_rate_limit
         while True:
             token = self.token
             hdrs = dict(header_fn() if header_fn else {"token": token or ""})
@@ -326,6 +329,9 @@ class ACInfinityClient:
                 response = self._client.post(url, **kwargs)
             except httpx.HTTPError as e:
                 logger.error("POST %s failed: %s", url, e)
+                return None
+            except RuntimeError as e:  # client closed underneath us (credentials just changed)
+                logger.warning("POST %s aborted: %s", url, e)
                 return None
 
             try:
@@ -508,6 +514,7 @@ class ACInfinityClient:
         Calls are spaced ≥ 2.5 s; ``999998`` backs off once (in ``_request``); the legacy
         ``code 500 + "rate"`` variant keeps its exponential backoff and form-body fallback.
         """
+        self.last_request_error = None
         if not self._ensure_token():
             return None
         params = {
@@ -562,6 +569,7 @@ class ACInfinityClient:
         Query params like the app (misterboe docs/api/history.md): paginate by passing the last
         row's ``id`` as ``id``. Returns ``data`` (``rows``, ``total``) or None. Read-only.
         """
+        self.last_request_error = None
         if not self._ensure_token():
             return None
         self._space_log_calls()

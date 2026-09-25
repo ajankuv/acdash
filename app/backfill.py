@@ -54,17 +54,37 @@ def backfill_days() -> int:
         return DEFAULT_DAYS
 
 
-def _chunks(start: int, end: int) -> list[tuple[int, int]]:
-    out = []
-    t = start
-    while t < end:
-        out.append((t, min(end, t + CHUNK_SECS)))
-        t += CHUNK_SECS
-    return out
+def _min_gap_secs() -> int:
+    """A gap must be longer than a few collector intervals, or a slow collector setting
+    (e.g. COLLECTOR_INTERVAL_SECONDS=600) would make every pair of readings a "gap"."""
+    try:
+        interval = int(os.environ.get("COLLECTOR_INTERVAL_SECONDS", "60"))
+    except ValueError:
+        interval = 60
+    return max(MIN_GAP_SECS, 3 * interval)
+
+
+# Days the cloud returned nothing usable for: {(dev_id, day_start): monotonic time tried}.
+# Skipped for EMPTY_RETRY_SECS so gaps the cloud can't fill aren't re-requested every run.
+EMPTY_RETRY_SECS = 24 * 3600
+_empty_days: dict[tuple[str, int], float] = {}
+
+
+def _day_buckets(gaps: list[tuple[int, int]]) -> dict[int, list[tuple[int, int]]]:
+    """Split gaps on UTC day boundaries and group them: one cloud request per day."""
+    buckets: dict[int, list[tuple[int, int]]] = {}
+    for start, end in gaps:
+        t = start
+        while t < end:
+            day = t - t % CHUNK_SECS
+            seg_end = min(end, day + CHUNK_SECS)
+            buckets.setdefault(day, []).append((t, seg_end))
+            t = seg_end
+    return buckets
 
 
 def backfill_controller(client: "ACInfinityClient", dev_id: str, *, now: int | None = None,
-                        days: int | None = None) -> tuple[int, int]:
+                        days: int | None = None, clock: Callable[[], float] = time.monotonic) -> tuple[int, int]:
     """Fill one controller's gaps. Returns ``(rows_inserted, requests_made)``."""
     days = backfill_days() if days is None else days
     if days <= 0:
@@ -73,21 +93,32 @@ def backfill_controller(client: "ACInfinityClient", dev_id: str, *, now: int | N
     until = now - RECENT_MARGIN_SECS
     since = now - days * 86_400
     inserted = requests = 0
-    for gap_start, gap_end in storage.find_gaps(dev_id, since, until, MIN_GAP_SECS):
-        for c_start, c_end in _chunks(gap_start, gap_end):
-            requests += 1
-            data = client.history_data_page(dev_id, c_end, c_start, page_size=PAGE_SIZE, order_direction=1)
-            if not data:
-                logger.info("backfill: no cloud data for %s %d–%d (%s)", dev_id, c_start, c_end,
-                            getattr(client, "last_request_error", None) or "empty")
-                continue
-            points = []
-            for row in data.get("rows") or []:
-                pt = history_row_to_point(row)
-                # Strictly inside the gap: the readings at its edges already exist locally.
-                if pt and gap_start < pt["t"] < gap_end:
-                    points.append(pt)
-            inserted += storage.insert_cloud_readings(dev_id, points)
+    gaps = storage.find_gaps(dev_id, since, until, _min_gap_secs())
+    for day, segs in sorted(_day_buckets(gaps).items()):
+        tried = _empty_days.get((dev_id, day))
+        if tried is not None and clock() - tried < EMPTY_RETRY_SECS:
+            continue
+        lo, hi = min(a for a, _ in segs), max(b for _, b in segs)
+        requests += 1
+        data = client.history_data_page(dev_id, hi, lo, page_size=PAGE_SIZE, order_direction=1)
+        if not data:
+            logger.info("backfill: no cloud data for %s %d–%d (%s)", dev_id, lo, hi,
+                        getattr(client, "last_request_error", None) or "empty")
+            if getattr(client, "last_request_error", None) is None:
+                _empty_days[(dev_id, day)] = clock()  # genuinely empty, not a transient error
+            continue
+        points = []
+        for row in data.get("rows") or []:
+            pt = history_row_to_point(row)
+            # Strictly inside a gap: the readings at its edges already exist locally.
+            if pt and any(a < pt["t"] < b for a, b in segs):
+                points.append(pt)
+        added = storage.insert_cloud_readings(dev_id, points)
+        inserted += added
+        if added == 0:
+            _empty_days[(dev_id, day)] = clock()
+        else:
+            _empty_days.pop((dev_id, day), None)
     return inserted, requests
 
 

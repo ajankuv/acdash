@@ -8,6 +8,14 @@ import pytest
 
 from app import backfill, storage
 
+
+@pytest.fixture(autouse=True)
+def _reset_empty_days(monkeypatch):
+    backfill._empty_days.clear()
+    monkeypatch.delenv("COLLECTOR_INTERVAL_SECONDS", raising=False)
+    yield
+    backfill._empty_days.clear()
+
 NOW = 1_800_000_000
 DAY = 86_400
 
@@ -122,7 +130,7 @@ def test_new_install_chunks_by_day(monkeypatch):
     monkeypatch.setenv("BACKFILL_DAYS", "3")
     c = CloudClient()
     backfill.backfill_controller(c, "1", now=NOW)
-    assert len(c.calls) == 3
+    assert len(c.calls) in (3, 4)  # 3 days of window, split on UTC day boundaries
     assert all(end - start <= backfill.CHUNK_SECS for _, start, end, _ in c.calls)
 
 
@@ -234,3 +242,57 @@ def test_backfill_helpers_are_plain_functions(monkeypatch):
     assert isinstance(client, ACInfinityClient)
     assert hasattr(client, "history_data_page")
     assert hasattr(main.lifespan(main.app), "__aenter__")  # lifespan itself is the context manager
+
+
+def test_many_small_gaps_in_one_day_are_one_request(monkeypatch):
+    monkeypatch.setenv("BACKFILL_DAYS", "1")
+    # readings every 10 min → 6-min... gaps of 600 s each (> 300 s) all within the last day
+    local("1", *range(NOW - 20 * 3600, NOW - 200, 600))
+    c = CloudClient()
+    _, reqs = backfill.backfill_controller(c, "1", now=NOW)
+    assert reqs <= 2  # one per UTC day touched, not one per gap
+
+
+def test_slow_collector_interval_is_not_a_gap(monkeypatch):
+    monkeypatch.setenv("BACKFILL_DAYS", "1")
+    monkeypatch.setenv("COLLECTOR_INTERVAL_SECONDS", "600")
+    local("1", *range(NOW - DAY - 600, NOW, 600))
+    c = CloudClient()
+    assert backfill.backfill_controller(c, "1", now=NOW) == (0, 0)
+
+
+def test_empty_cloud_days_not_retried_for_a_day(monkeypatch):
+    monkeypatch.setenv("BACKFILL_DAYS", "2")
+
+    class Empty(CloudClient):
+        def history_data_page(self, *a, **k):
+            super().history_data_page(*a, **k)
+            return {"rows": []}
+
+    c = Empty()
+    t = [1000.0]
+    backfill.backfill_controller(c, "1", now=NOW, clock=lambda: t[0])
+    first = len(c.calls)
+    assert first > 0
+    t[0] += 6 * 3600  # next 6-hourly run
+    backfill.backfill_controller(c, "1", now=NOW, clock=lambda: t[0])
+    assert len(c.calls) == first
+    t[0] += backfill.EMPTY_RETRY_SECS
+    backfill.backfill_controller(c, "1", now=NOW, clock=lambda: t[0])
+    assert len(c.calls) == 2 * first
+
+
+def test_transient_error_is_retried_next_run(monkeypatch):
+    monkeypatch.setenv("BACKFILL_DAYS", "1")
+
+    class Limited(CloudClient):
+        def history_data_page(self, *a, **k):
+            super().history_data_page(*a, **k)
+            self.last_request_error = "AC Infinity is rate limiting — try again shortly"
+            return None
+
+    c = Limited()
+    backfill.backfill_controller(c, "1", now=NOW)
+    n = len(c.calls)
+    backfill.backfill_controller(c, "1", now=NOW)
+    assert len(c.calls) == 2 * n

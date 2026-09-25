@@ -222,3 +222,45 @@ def test_v2_headers_ai_controller(api):
     c.get_automations_raw("9")
     sent = [h for p, _, _, h in api.calls if p.endswith("/getGroups")][-1]
     assert sent["devtype"] == "20" and sent["minversion"] == "3.5"
+
+
+# ── review fixes ───────────────────────────────────────────────────
+
+
+def test_rate_limited_write_is_not_resent(api):
+    c = make_client(api)
+    api.queue("/dev/addDevMode", (200, {"code": 999998, "msg": "Rate Limiting!"}))
+    out = c.set_port_mode("1", 1, {"atType": 2})
+    assert out["code"] == 999998
+    assert api.count("/dev/addDevMode") == 1
+    assert c.slept == []  # no 10 s wait while holding the write lock
+
+
+def test_closed_client_returns_none_instead_of_raising(api):
+    c = make_client(api)
+    assert c.authenticate()
+    c._client.close()
+    assert c.get_dev_setting("1", 0) is None
+
+
+def test_stale_rate_limit_message_cleared(api):
+    c = make_client(api)
+    api.queue("/log/dataPage", *[(200, {"code": 999998, "msg": "Rate Limiting!"})] * 2)
+    assert c.history_data_page("1", 2000, 1000) is None
+    assert c.last_request_error
+    api.queue("/log/dataPage", (200, {"code": 500, "msg": "server error"}))
+    assert c.history_data_page("1", 2000, 1000) is None
+    assert c.last_request_error is None
+
+
+def test_reset_client_defers_close(monkeypatch):
+    import app.session as session
+    closed = []
+    monkeypatch.setattr(session, "RETIRE_DELAY_SECS", 0.05)
+    c = session.get_client("a@b.c", "one")
+    monkeypatch.setattr(c, "close", lambda: closed.append(1))
+    session.reset_client()
+    assert closed == []  # still usable by in-flight requests
+    import time as _t
+    _t.sleep(0.2)
+    assert closed == [1]
