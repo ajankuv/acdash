@@ -127,6 +127,8 @@ AC Dash needs your AC Infinity cloud email and password to call their API on you
 - Credentials are written to **`/app/data/.env`** inside the container after the setup wizard. Mount a volume on `/app/data` so they survive container recreates.
 - **Nothing is sent to this project's author** or any third party. All traffic goes directly to `acinfinityserver.com` — the same server the mobile app talks to.
 - The AC Infinity API uses plain HTTP (not HTTPS) — this is on their end, not ours. Run AC Dash on a trusted network.
+- **Sign-in problems:** passwords longer than 25 characters are cut to 25 by the AC Infinity app, so AC Dash tries that automatically if the full password is refused. After a refused sign-in AC Dash waits 5 minutes before trying again (so a wrong password isn't hammered every refresh) — fix it in the setup wizard or restart the container to retry immediately.
+- AC Dash keeps **one** AC Infinity session and re-uses it; it only signs in again when the API says the session expired.
 - Don't paste the debug JSON dump (`/api/debug/ac-infinity-dump`) into public issues — it contains device IDs, Wi-Fi names, and account fields.
 
 ---

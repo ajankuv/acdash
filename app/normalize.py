@@ -161,8 +161,19 @@ def normalize_devices(raw_devices: list[dict[str, Any]]) -> list[dict[str, Any]]
     return controllers
 
 
+# Offline controllers report temperature / humidity / VPD as this raw value (signed 16-bit min).
+OFFLINE_SENTINEL = -32768
+
+
+def is_offline_sentinel(raw: Any) -> bool:
+    try:
+        return int(float(raw)) == OFFLINE_SENTINEL
+    except (TypeError, ValueError, OverflowError):
+        return False
+
+
 def _scaled_optional(raw: Any, *, div: float) -> float | None:
-    if raw is None:
+    if raw is None or is_offline_sentinel(raw):
         return None
     try:
         return float(raw) / div
@@ -345,7 +356,7 @@ def _normalize_sensors(sensors: list[dict[str, Any]], controller_id: str) -> lis
     for sensor in sensors:
         stype = sensor.get("sensorType")
         sdata = sensor.get("sensorData")
-        if stype is None or sdata is None:
+        if stype is None or sdata is None or is_offline_sentinel(sdata):
             continue
         try:
             stype = int(stype)

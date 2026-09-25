@@ -31,6 +31,7 @@ from app.control import (
 )
 from app.history import fetch_history_for_chart, thin_points
 from app.normalize import normalize_devices
+from app.session import get_client, reset_client
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
 logger = logging.getLogger(__name__)
@@ -158,16 +159,16 @@ def _fetch_controllers() -> tuple[list[dict], str | None]:
     if not email or not password:
         return [], "Credentials not configured."
 
-    client = ACInfinityClient(email, password)
+    client = get_client(email, password)
     try:
         raw = client.get_devices()
     except Exception as exc:
         logger.error("Failed to fetch devices from AC Infinity: %s", exc, exc_info=True)
         return [], f"Could not reach AC Infinity ({type(exc).__name__})."
-    finally:
-        client.close()
 
     if not raw:
+        if client.last_auth_error and not client.token:
+            return [], f"Could not sign in to AC Infinity: {client.last_auth_error}"
         return [], "No data from AC Infinity (check credentials or API availability)."
 
     try:
@@ -240,6 +241,7 @@ def setup_post(
         )
 
     save_credentials_file(email, password)
+    reset_client()
     _clear_cache()
     logger.info("Saved credentials to %s", ENV_FILE_PATH)
     return RedirectResponse("/", status_code=303)
@@ -254,11 +256,8 @@ def ac_infinity_debug_dump() -> JSONResponse:
     email, password = _get_credentials()
     if not email or not password:
         return JSONResponse({"error": "Unauthorized"}, status_code=401)
-    client = ACInfinityClient(email, password)
-    try:
-        bundle = collect_debug_bundle(client)
-    finally:
-        client.close()
+    client = get_client(email, password)
+    bundle = collect_debug_bundle(client)
 
     note = (
         "Sensitive: your controllers and settings. Share only with people you trust. "
@@ -341,11 +340,8 @@ def api_port_settings(
     email, password = _get_credentials()
     if not email or not password:
         return JSONResponse({"error": "Unauthorized"}, status_code=401)
-    client = ACInfinityClient(email, password)
-    try:
-        settings = read_port_settings(client, dev_id, port)
-    finally:
-        client.close()
+    client = get_client(email, password)
+    settings = read_port_settings(client, dev_id, port)
     return JSONResponse(settings)
 
 
@@ -387,15 +383,13 @@ async def api_port_control(request: Request) -> JSONResponse:
     email, password = _get_credentials()
     if not email or not password:
         return JSONResponse({"error": "Unauthorized"}, status_code=401)
-    client = ACInfinityClient(email, password)
+    client = get_client(email, password)
     try:
         write_port_control(client, dev_id, port, changes)
     except RateLimitError as e:
         return JSONResponse({"error": str(e)}, status_code=429)
     except ControlError as e:
         return JSONResponse({"error": str(e)}, status_code=400)
-    finally:
-        client.close()
     return JSONResponse({"ok": True})
 
 
@@ -410,11 +404,8 @@ def api_automations(dev_id: str = Query("", alias="dev_id")) -> JSONResponse:
     email, password = _get_credentials()
     if not email or not password:
         return JSONResponse({"error": "Unauthorized"}, status_code=401)
-    client = ACInfinityClient(email, password)
-    try:
-        automations = get_automations(client, dev_id)
-    finally:
-        client.close()
+    client = get_client(email, password)
+    automations = get_automations(client, dev_id)
     return JSONResponse(automations)
 
 
@@ -435,11 +426,8 @@ async def api_automation_toggle(request: Request) -> JSONResponse:
     email, password = _get_credentials()
     if not email or not password:
         return JSONResponse({"error": "Unauthorized"}, status_code=401)
-    client = ACInfinityClient(email, password)
-    try:
-        result = client.toggle_automation_raw(dev_id, adv_id, is_on=is_on)
-    finally:
-        client.close()
+    client = get_client(email, password)
+    result = client.toggle_automation_raw(dev_id, adv_id, is_on=is_on)
     if result is None:
         return JSONResponse({"error": "Could not reach AC Infinity"}, status_code=502)
     code = result.get("code") if isinstance(result, dict) else None
@@ -465,11 +453,8 @@ async def api_automation_delete(request: Request) -> JSONResponse:
     email, password = _get_credentials()
     if not email or not password:
         return JSONResponse({"error": "Unauthorized"}, status_code=401)
-    client = ACInfinityClient(email, password)
-    try:
-        result = client.delete_automation_raw(dev_id, adv_id)
-    finally:
-        client.close()
+    client = get_client(email, password)
+    result = client.delete_automation_raw(dev_id, adv_id)
     if result is None:
         return JSONResponse({"error": "Could not reach AC Infinity"}, status_code=502)
     code = result.get("code") if isinstance(result, dict) else None
@@ -510,11 +495,8 @@ async def api_automation_create(request: Request) -> JSONResponse:
     email, password = _get_credentials()
     if not email or not password:
         return JSONResponse({"error": "Unauthorized"}, status_code=401)
-    client = ACInfinityClient(email, password)
-    try:
-        result = client.create_automation_raw(dev_id, payload)
-    finally:
-        client.close()
+    client = get_client(email, password)
+    result = client.create_automation_raw(dev_id, payload)
     if result is None:
         return JSONResponse({"error": "Could not reach AC Infinity"}, status_code=502)
     code = result.get("code") if isinstance(result, dict) else None
@@ -570,39 +552,36 @@ def api_history_chart(
     if not email or not password:
         return JSONResponse({"error": "Unauthorized"}, status_code=401)
 
-    client = ACInfinityClient(email, password)
-    try:
-        raw = client.get_devices()
-        allowed = {str(d.get("devId")) for d in raw if d.get("devId")}
-        if dev_id not in allowed:
-            return JSONResponse({"error": "Controller not found on this account"}, status_code=404)
+    client = get_client(email, password)
+    raw = client.get_devices()
+    allowed = {str(d.get("devId")) for d in raw if d.get("devId")}
+    if dev_id not in allowed:
+        return JSONResponse({"error": "Controller not found on this account"}, status_code=404)
 
-        def fetch_page(
-            d: str,
-            time_end: int,
-            time_start: int,
-            page_size: int,
-            *,
-            order_direction: int = 1,
-        ) -> dict[str, Any]:
-            return (
-                client.history_data_page(
-                    d,
-                    time_end,
-                    time_start,
-                    page_size=page_size,
-                    order_direction=order_direction,
-                )
-                or {}
+    def fetch_page(
+        d: str,
+        time_end: int,
+        time_start: int,
+        page_size: int,
+        *,
+        order_direction: int = 1,
+    ) -> dict[str, Any]:
+        return (
+            client.history_data_page(
+                d,
+                time_end,
+                time_start,
+                page_size=page_size,
+                order_direction=order_direction,
             )
-
-        points, meta = fetch_history_for_chart(
-            history_page_fn=fetch_page,
-            dev_id=dev_id,
-            hours=float(hours),
+            or {}
         )
-    finally:
-        client.close()
+
+    points, meta = fetch_history_for_chart(
+        history_page_fn=fetch_page,
+        dev_id=dev_id,
+        hours=float(hours),
+    )
 
     result = {"points": points, "meta": meta}
     _set_history_cache(dev_id, hours, result)

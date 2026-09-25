@@ -120,6 +120,13 @@ def phase_fresh(app: str, fake: str) -> None:
     check("correct password saved", st in (302, 303), f"status={st}")
 
     dashboard_checks(app)
+    for _ in range(3):
+        time.sleep(2.5)  # CACHE_SECONDS=2 in the smoke stack → each refresh hits the fake API
+        req("GET", f"{app}/api/dashboard-snapshot")
+    calls = json.loads(req("GET", f"{fake}/__calls")[2])
+    logins = calls.get("/api/user/appUserLogin", 0)
+    # 2 wizard attempts (wrong + right, throwaway client) + 1 shared session login.
+    check("session reused across requests (no login per request)", logins <= 4, f"logins={logins} calls={calls}")
 
     before = len(json.loads(req("GET", f"{fake}/__writes")[2]))
     st, _, body = req("POST", f"{app}/api/port-control",

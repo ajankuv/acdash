@@ -416,6 +416,10 @@ def write_port_control(
     if not isinstance(result, dict):
         return
     code = result.get("code")
+    msg_l = str(result.get("msg") or "").lower()
+    if code == 10003 or ("login expired" in msg_l or "login again" in msg_l):
+        # The client already renewed the session but deliberately did not resend the write.
+        raise ControlError("AC Infinity session had expired and was renewed — please apply the change again.")
     if code is not None and code != 200:
         # 999999 is a generic "operation failed" from the API (not specifically an
         # automation lock) — surface whatever message the server returned.

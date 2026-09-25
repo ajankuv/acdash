@@ -24,6 +24,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from app.normalize import is_offline_sentinel
+
 # Calendar width for each ``(endTime, time]`` band when ``hours`` exceeds the threshold below.
 # 7-day steps keep ``window_lo`` old enough that paging usually survives the first batch.
 CHART_SEGMENT_HOURS = 168.0
@@ -31,7 +33,7 @@ CHART_SEGMENT_THRESHOLD_HOURS = 24.0
 
 
 def _div100(raw: Any) -> float | None:
-    if raw is None:
+    if raw is None or is_offline_sentinel(raw):
         return None
     try:
         return float(raw) / 100.0
