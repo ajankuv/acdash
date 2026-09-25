@@ -36,6 +36,10 @@ from app.session import get_client, reset_client
 from app import verify
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
+# httpx logs every request URL at INFO; AC Infinity URLs carry the session token (appId=...)
+# and full port records in the query string. Keep them out of container logs people may share.
+for _noisy in ("httpx", "httpcore"):
+    logging.getLogger(_noisy).setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
 
 BASE_DIR = Path(__file__).resolve().parent.parent

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import threading
 import time
 from typing import Any
@@ -82,6 +83,15 @@ LOG_ENDPOINT_SPACING_SECS = 2.5
 AI_DEV_TYPES = frozenset({20, 21, 22})
 SESSION_EXPIRED_CODES = frozenset({10003})
 RATE_LIMIT_CODE = 999998
+
+
+_QUERY_RE = re.compile(r"\?[^\s'\"]*")
+
+
+def _safe_err(exc: BaseException) -> str:
+    """Exception text with URL query strings removed — they can carry the session token
+    (``appId=``) or, on the query-string login variant, the password."""
+    return f"{type(exc).__name__}: {_QUERY_RE.sub('?<redacted>', str(exc))}"
 
 
 def _classify(status_code: int, body: Any) -> str:
@@ -190,7 +200,7 @@ class ACInfinityClient:
             response.raise_for_status()
             out = response.json()
         except (httpx.HTTPError, ValueError) as e:
-            logger.warning("Login POST (%s) failed: %s", "query" if use_query else "form", e)
+            logger.warning("Login POST (%s) failed: %s", "query" if use_query else "form", _safe_err(e))
             return None
 
         return out if isinstance(out, dict) else None
@@ -328,10 +338,10 @@ class ACInfinityClient:
                     kwargs["timeout"] = timeout
                 response = self._client.post(url, **kwargs)
             except httpx.HTTPError as e:
-                logger.error("POST %s failed: %s", url, e)
+                logger.error("POST %s failed: %s", url, _safe_err(e))
                 return None
             except RuntimeError as e:  # client closed underneath us (credentials just changed)
-                logger.warning("POST %s aborted: %s", url, e)
+                logger.warning("POST %s aborted: %s", url, _safe_err(e))
                 return None
 
             try:

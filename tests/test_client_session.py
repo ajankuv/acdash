@@ -264,3 +264,24 @@ def test_reset_client_defers_close(monkeypatch):
     import time as _t
     _t.sleep(0.2)
     assert closed == [1]
+
+
+def test_logged_errors_never_contain_query_secrets(caplog):
+    def boom(request):
+        raise httpx.ConnectError(f"failed for {request.url}")
+
+    c = ACInfinityClient("user@example.com", "pw-test-only")
+    c._client = httpx.Client(transport=httpx.MockTransport(boom))
+    with caplog.at_level("DEBUG"):
+        c.authenticate()                      # query-string login variant puts the password in the URL
+        c.token = "tok-test"
+        c.history_data_page("1", 2000, 1000)  # history puts appId=<token> in the URL
+    assert "pw-test-only" not in caplog.text
+    assert "tok-test" not in caplog.text
+    assert "redacted" in caplog.text
+
+
+def test_httpx_request_logging_silenced():
+    import logging
+    import app.main  # noqa: F401 — configures logging
+    assert logging.getLogger("httpx").getEffectiveLevel() >= logging.WARNING

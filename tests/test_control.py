@@ -495,7 +495,7 @@ def test_build_timer_on_variant_default():
 
 
 def _auto_current():
-    """Current settings for a port already in auto mode (mirrors live 2x4 tent port 4)."""
+    """Current settings for a port already in auto mode (realistic auto-mode values)."""
     return {
         **_current(),
         "mode": "auto",

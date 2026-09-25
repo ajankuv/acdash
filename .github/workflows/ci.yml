@@ -17,9 +17,9 @@ jobs:
   unit:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: "3.12"  # same as the image
           cache: pip
@@ -41,12 +41,12 @@ jobs:
       contents: read
       security-events: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
 
       - name: Build image (load, no push)
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
           context: .
           load: true
@@ -78,10 +78,12 @@ jobs:
 
       - name: Upgrade + rollback test (published :latest → this build → :latest, one data volume)
         if: steps.prev.outputs.image != ''
-        run: ci/smoke/upgrade.sh "${{ steps.prev.outputs.image }}" acdash:ci
+        env:
+          PREV_IMAGE: ${{ steps.prev.outputs.image }}
+        run: ci/smoke/upgrade.sh "$PREV_IMAGE" acdash:ci
 
       - name: Vulnerability scan (report)
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           image-ref: acdash:ci
           format: sarif
@@ -93,13 +95,13 @@ jobs:
       - name: Upload scan to code scanning
         if: always() && hashFiles('trivy.sarif') != ''
         continue-on-error: true
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@1190a975f95ce23525efb6a3fc21ea29567c1b52 # v3
         with:
           sarif_file: trivy.sarif
 
       - name: Gate on critical CVEs (opt-in via repo variable TRIVY_FAIL_ON_CRITICAL=true)
         if: vars.TRIVY_FAIL_ON_CRITICAL == 'true'
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           image-ref: acdash:ci
           format: table
