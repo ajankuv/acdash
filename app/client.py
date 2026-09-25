@@ -11,7 +11,9 @@ import httpx
 
 logger = logging.getLogger(__name__)
 
-API_BASE = "http://www.acinfinityserver.com/api"
+DEFAULT_API_BASE = "http://www.acinfinityserver.com/api"
+# Override for CI (points the container at a fake AC Infinity server). Unset → real cloud.
+API_BASE = (os.environ.get("ACINFINITY_API_BASE") or "").strip().rstrip("/") or DEFAULT_API_BASE
 LOGIN_ENDPOINT = f"{API_BASE}/user/appUserLogin"
 DEVICES_ENDPOINT = f"{API_BASE}/user/devInfoListAll"
 DEV_MODE_SETTING_ENDPOINT = f"{API_BASE}/dev/getdevModeSettingList"

@@ -1,0 +1,162 @@
+#!/usr/bin/env python3
+"""Smoke test the built acdash image against the fake AC Infinity API.
+
+Stdlib only (runs on the CI host with any Python 3.9+). Phases:
+  fresh    — no credentials: / redirects to setup, wrong password is rejected,
+             correct password is saved, dashboard + APIs render fake controllers,
+             a port write reaches the fake API.
+  persist  — after a container restart: saved credentials and history survive.
+
+Usage: smoke.py fresh|persist [--app http://127.0.0.1:18080] [--fake http://127.0.0.1:19000]
+Exit code 0 = pass. Prints one line per check.
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+
+DEV1 = "900000000000000001"
+DEV2 = "900000000000000002"
+FAILED: list[str] = []
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, *a, **k):  # noqa: D401
+        return None
+
+
+_opener = urllib.request.build_opener(_NoRedirect)
+
+
+def req(method: str, url: str, *, data: bytes | None = None, ctype: str | None = None,
+        timeout: float = 30) -> tuple[int, dict[str, str], str]:
+    r = urllib.request.Request(url, data=data, method=method)
+    if ctype:
+        r.add_header("Content-Type", ctype)
+    try:
+        with _opener.open(r, timeout=timeout) as resp:
+            return resp.status, dict(resp.headers), resp.read().decode("utf-8", "replace")
+    except urllib.error.HTTPError as e:
+        return e.code, dict(e.headers or {}), e.read().decode("utf-8", "replace")
+
+
+def check(name: str, cond: bool, detail: str = "") -> bool:
+    print(f"{'PASS' if cond else 'FAIL'}  {name}" + (f"  — {detail}" if detail and not cond else ""))
+    if not cond:
+        FAILED.append(name)
+    return cond
+
+
+def wait_for(url: str, seconds: float = 60) -> bool:
+    deadline = time.time() + seconds
+    while time.time() < deadline:
+        try:
+            if req("GET", url, timeout=3)[0] == 200:
+                return True
+        except OSError:
+            pass
+        time.sleep(1)
+    return False
+
+
+def form(d: dict[str, str]) -> bytes:
+    return urllib.parse.urlencode(d).encode()
+
+
+def dashboard_checks(app: str) -> None:
+    st, _, body = req("GET", f"{app}/")
+    check("GET / renders dashboard", st == 200 and "CI Flower Tent" in body and "CI Veg Tent" in body,
+          f"status={st}")
+
+    st, _, body = req("GET", f"{app}/api/dashboard-snapshot")
+    ok = st == 200
+    try:
+        snap = json.loads(body)
+        ok = ok and snap.get("error") in (None, "") and "Exhaust Fan" in (snap.get("cards_html") or "")
+    except ValueError:
+        ok = False
+    check("GET /api/dashboard-snapshot has fake ports", ok, f"status={st} body={body[:200]}")
+
+    st, _, body = req("GET", f"{app}/api/port-settings?dev_id={DEV1}&port=1")
+    try:
+        ps = json.loads(body)
+    except ValueError:
+        ps = {}
+    check("GET /api/port-settings returns mode", st == 200 and "mode" in ps, f"status={st} body={body[:200]}")
+
+    st, _, body = req("GET", f"{app}/api/history-chart?dev_id={DEV1}&hours=2")
+    try:
+        pts = json.loads(body).get("points") or []
+    except ValueError:
+        pts = []
+    check("GET /api/history-chart returns points", st == 200 and len(pts) > 10, f"status={st} points={len(pts)}")
+
+    st, _, _ = req("GET", f"{app}/api/automations?dev_id={DEV1}")
+    check("GET /api/automations ok", st == 200, f"status={st}")
+
+
+def phase_fresh(app: str, fake: str) -> None:
+    check("app /health", wait_for(f"{app}/health"), "never healthy")
+    check("fake /health", wait_for(f"{fake}/health"), "never healthy")
+    req("POST", f"{fake}/__reset")
+
+    st, hdr, _ = req("GET", f"{app}/")
+    check("no creds: / redirects to /setup", st in (302, 303, 307) and "setup" in hdr.get("location", hdr.get("Location", "")),
+          f"status={st}")
+    st, _, body = req("GET", f"{app}/setup")
+    check("GET /setup renders form", st == 200 and "password" in body.lower(), f"status={st}")
+
+    st, _, body = req("POST", f"{app}/setup", data=form({"email": "ci@example.com", "password": "wrong"}),
+                      ctype="application/x-www-form-urlencoded")
+    check("wrong password rejected", st == 400 and "Incorrect Password" in body, f"status={st}")
+
+    st, _, _ = req("POST", f"{app}/setup", data=form({"email": "ci@example.com", "password": "ci-password"}),
+                   ctype="application/x-www-form-urlencoded")
+    check("correct password saved", st in (302, 303), f"status={st}")
+
+    dashboard_checks(app)
+
+    before = len(json.loads(req("GET", f"{fake}/__writes")[2]))
+    st, _, body = req("POST", f"{app}/api/port-control",
+                      data=json.dumps({"dev_id": DEV1, "port": 1, "mode": "manual", "state": True, "speed": 7}).encode(),
+                      ctype="application/json")
+    check("POST /api/port-control accepted", st == 200 and '"ok":true' in body.replace(" ", ""), f"status={st} body={body[:200]}")
+    writes = json.loads(req("GET", f"{fake}/__writes")[2])
+    last = writes[-1] if len(writes) > before else {}
+    fields = {**last.get("query", {}), **last.get("form", {})}
+    check("write reached fake API with full record", fields.get("onSpead") == "7" and fields.get("devId") == DEV1
+          and fields.get("externalPort") == "1", f"writes={len(writes)} last={str(last)[:300]}")
+
+    st, _, body = req("POST", f"{app}/api/port-control",
+                      data=json.dumps({"dev_id": DEV1, "port": 99}).encode(), ctype="application/json")
+    check("invalid port rejected with 400", st == 400, f"status={st}")
+
+    # Let the collector (5 s interval in the smoke stack) store at least one reading.
+    time.sleep(12)
+
+
+def phase_persist(app: str, fake: str) -> None:
+    check("app /health after restart", wait_for(f"{app}/health"), "never healthy")
+    st, _, body = req("GET", f"{app}/")
+    check("saved credentials survive restart", st == 200 and "CI Flower Tent" in body, f"status={st}")
+    dashboard_checks(app)
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("phase", choices=["fresh", "persist"])
+    ap.add_argument("--app", default="http://127.0.0.1:18080")
+    ap.add_argument("--fake", default="http://127.0.0.1:19000")
+    a = ap.parse_args()
+    {"fresh": phase_fresh, "persist": phase_persist}[a.phase](a.app.rstrip("/"), a.fake.rstrip("/"))
+    print(f"\n{a.phase}: {'FAILED ' + str(len(FAILED)) + ' check(s)' if FAILED else 'all checks passed'}")
+    return 1 if FAILED else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -4,3 +4,16 @@ __pycache__
 .git
 .env
 data/
+.venv*
+tests
+RND
+openspec
+ci
+docs
+.github
+.claude
+.cursor
+.superpowers
+app/qc_*.py
+*.db
+*dump*.json

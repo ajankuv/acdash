@@ -116,6 +116,7 @@ ACINFINITY_PASSWORD=yourpassword
 | `LOG_LEVEL` | `INFO` | `INFO` or `DEBUG` |
 | `ENV_FILE_PATH` | `/app/data/.env` | Where wizard-saved credentials are written |
 | `ACDASH_USE_ENV_CREDENTIALS` | — | Set to `1` to use `ACINFINITY_EMAIL`/`PASSWORD` from env instead of the wizard |
+| `ACINFINITY_API_BASE` | AC Infinity cloud | Override the API base URL (used by CI to point at a fake server — leave unset) |
 
 ---
 
@@ -127,6 +128,26 @@ AC Dash needs your AC Infinity cloud email and password to call their API on you
 - **Nothing is sent to this project's author** or any third party. All traffic goes directly to `acinfinityserver.com` — the same server the mobile app talks to.
 - The AC Infinity API uses plain HTTP (not HTTPS) — this is on their end, not ours. Run AC Dash on a trusted network.
 - Don't paste the debug JSON dump (`/api/debug/ac-infinity-dump`) into public issues — it contains device IDs, Wi-Fi names, and account fields.
+
+---
+
+## Development & CI
+
+```bash
+pip install -r requirements-dev.txt
+python -m pytest -q                      # unit tests (all mocked, no AC Infinity account needed)
+
+docker build -t acdash:ci .
+ci/smoke/hygiene.sh acdash:ci            # image must not contain tests/, RND/, .env, qc_*.py, pytest
+ci/smoke/run.sh                          # real container vs fake AC Infinity API (ci/fake_acinfinity)
+```
+
+GitHub Actions:
+
+- **`ci.yml`** — every PR and branch push: unit tests → build image → hygiene → smoke test → Trivy scan (report only). Never pushes.
+- **`release-docker.yml`** — `main` and `v*` tags: runs the same CI first, only then pushes to GHCR, then pulls the published `:<sha>` image and smoke-tests it again.
+- To make critical CVEs block releases, set repository variable **`TRIVY_FAIL_ON_CRITICAL=true`**.
+- Dependabot opens weekly update PRs (pip, Actions, Docker base images); they go through the same CI.
 
 ---
 

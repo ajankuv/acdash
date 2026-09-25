@@ -1,0 +1,26 @@
+# Smoke-test stack: the built acdash image + a fake AC Infinity API.
+# Usage: ACDASH_IMAGE=acdash:ci docker compose -f ci/compose.smoke.yml -p acdash-smoke up -d --build --wait
+services:
+  fake:
+    build: ./fake_acinfinity
+    ports:
+      - "127.0.0.1:19000:9000"
+
+  acdash:
+    image: ${ACDASH_IMAGE:-acdash:ci}
+    depends_on:
+      fake:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:18080:8080"
+    environment:
+      - PORT=8080
+      - ENV_FILE_PATH=/app/data/.env
+      - ACINFINITY_API_BASE=http://fake:9000/api
+      - COLLECTOR_INTERVAL_SECONDS=5
+      - CACHE_SECONDS=2
+    volumes:
+      - acdash_data:/app/data
+
+volumes:
+  acdash_data:

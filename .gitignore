@@ -2,6 +2,7 @@
 
 # Python
 .venv/
+.venv*/
 __pycache__/
 *.py[cod]
 *.pyo
@@ -49,5 +50,8 @@ data/
 docs/assets/mockup.html
 
 # Dev / QC scripts — useful locally but not part of the published app
-tests/
+# (tests/ IS tracked — CI runs it)
 app/qc_*.py
+
+# OpenSpec planning artifacts (developer-local)
+openspec/

@@ -1,0 +1,91 @@
+# Tests every change: unit tests, then build the image and smoke-test the real container
+# against a fake AC Infinity API (ci/fake_acinfinity). Never pushes images.
+# Also called by release-docker.yml (workflow_call) so releases are gated on the same checks.
+
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches-ignore: [main]  # main runs these via release-docker.yml
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  unit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"  # same as the image
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+
+      - name: Install
+        run: pip install -r requirements-dev.txt
+
+      - name: Compile check
+        run: python -m compileall -q app ci
+
+      - name: Unit tests
+        run: python -m pytest -q
+
+  image:
+    needs: unit
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build image (load, no push)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: true
+          push: false
+          tags: acdash:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Image hygiene
+        run: ci/smoke/hygiene.sh acdash:ci
+
+      - name: Smoke test (fake AC Infinity API)
+        env:
+          ACDASH_IMAGE: acdash:ci
+        run: ci/smoke/run.sh
+
+      - name: Vulnerability scan (report)
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: acdash:ci
+          format: sarif
+          output: trivy.sarif
+          ignore-unfixed: true
+          severity: CRITICAL,HIGH
+          exit-code: "0"
+
+      - name: Upload scan to code scanning
+        if: always() && hashFiles('trivy.sarif') != ''
+        continue-on-error: true
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy.sarif
+
+      - name: Gate on critical CVEs (opt-in via repo variable TRIVY_FAIL_ON_CRITICAL=true)
+        if: vars.TRIVY_FAIL_ON_CRITICAL == 'true'
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: acdash:ci
+          format: table
+          ignore-unfixed: true
+          severity: CRITICAL
+          exit-code: "1"
