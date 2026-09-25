@@ -1,0 +1,47 @@
+# Upgrade / rollback test: run an OLDER acdash image (which has no ACINFINITY_API_BASE and
+# always calls www.acinfinityserver.com) against the fake API by giving the fake that hostname
+# on an internal-only network — nothing can reach the real AC Infinity cloud.
+# Usage: ci/smoke/upgrade.sh <old-image> <new-image>
+services:
+  fake:
+    build: ./fake_acinfinity
+    command: ["uvicorn", "server:app", "--host", "0.0.0.0", "--port", "80"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:80/health')"]
+      interval: 3s
+      retries: 20
+    networks:
+      sealed:
+        aliases:
+          - www.acinfinityserver.com
+          - acinfinityserver.com
+
+  acdash:
+    image: ${ACDASH_IMAGE:?set ACDASH_IMAGE}
+    depends_on:
+      fake:
+        condition: service_healthy
+    environment:
+      - PORT=8080
+      - ENV_FILE_PATH=/app/data/.env
+      - COLLECTOR_INTERVAL_SECONDS=5
+      - CACHE_SECONDS=2
+      - BACKFILL_DAYS=1
+    volumes:
+      - acdash_data:/app/data
+    networks:
+      - sealed
+
+  # The sealed network is internal (no internet), so a probe container reaches acdash for us.
+  probe:
+    image: python:3.12-slim
+    command: ["sleep", "infinity"]
+    networks:
+      - sealed
+
+networks:
+  sealed:
+    internal: true
+
+volumes:
+  acdash_data:

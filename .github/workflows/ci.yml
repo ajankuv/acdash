@@ -69,6 +69,17 @@ jobs:
           ACINFINITY_WRITE_FORMAT: form
         run: ci/smoke/run.sh
 
+      - name: Pull currently published image (for upgrade test)
+        id: prev
+        continue-on-error: true
+        run: |
+          prev="ghcr.io/${GITHUB_REPOSITORY,,}:latest"
+          docker pull "$prev" && echo "image=$prev" >> "$GITHUB_OUTPUT"
+
+      - name: Upgrade + rollback test (published :latest → this build → :latest, one data volume)
+        if: steps.prev.outputs.image != ''
+        run: ci/smoke/upgrade.sh "${{ steps.prev.outputs.image }}" acdash:ci
+
       - name: Vulnerability scan (report)
         uses: aquasecurity/trivy-action@0.28.0
         with:

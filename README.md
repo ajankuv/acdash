@@ -146,11 +146,12 @@ python -m pytest -q                      # unit tests (all mocked, no AC Infinit
 docker build -t acdash:ci .
 ci/smoke/hygiene.sh acdash:ci            # image must not contain tests/, RND/, .env, qc_*.py, pytest
 ci/smoke/run.sh                          # real container vs fake AC Infinity API (ci/fake_acinfinity)
+ci/smoke/upgrade.sh <old-image> acdash:ci # old → new → old on one data volume (sealed network, no real cloud)
 ```
 
 GitHub Actions:
 
-- **`ci.yml`** — every PR and branch push: unit tests → build image → hygiene → smoke test → Trivy scan (report only). Never pushes.
+- **`ci.yml`** — every PR and branch push: unit tests → build image → hygiene → smoke test (both write formats) → upgrade/rollback test against the published `:latest` → Trivy scan (report only). Never pushes.
 - **`release-docker.yml`** — `main` and `v*` tags: runs the same CI first, only then pushes to GHCR, then pulls the published `:<sha>` image and smoke-tests it again.
 - To make critical CVEs block releases, set repository variable **`TRIVY_FAIL_ON_CRITICAL=true`**.
 - Dependabot opens weekly update PRs (pip, Actions, Docker base images); they go through the same CI.
