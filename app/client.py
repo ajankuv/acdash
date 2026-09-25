@@ -402,25 +402,40 @@ class ACInfinityClient:
         )
 
     def set_port_mode(
-        self, dev_id: str | int, port: int, payload: dict[str, Any], *, _retry: bool = True
+        self,
+        dev_id: str | int,
+        port: int,
+        payload: dict[str, Any],
+        *,
+        transport: str = "query",
+        sign: bool = False,
+        _retry: bool = True,
     ) -> dict[str, Any] | None:
         """POST dev/addDevMode — write port mode settings.
 
-        Matches the AC Infinity app / dalinicus client: parameters go in the **query
-        string** (this endpoint is a Retrofit @QueryMap, not a form body) and a
-        ``User-Agent`` is sent. The ``payload`` is the COMPLETE settings record with the
-        changed fields overlaid (built by control.build_write_payload) — a partial body
-        is what the API rejects with code 999999.
+        ``transport="query"`` (default): parameters in the **query string**, like the original
+        Retrofit ``@QueryMap`` / dalinicus client. ``transport="form"``: form-urlencoded body,
+        like ober37 / keithah / app 2.0.8. The ``payload`` comes from control.build_write_payload.
 
+        ``sign=True`` adds the app 2.0.8 request-signing headers (see ``sign_headers``).
         On an expired session the session is renewed but the write is NOT resent (the
         caller gets the expired body back and asks the user to retry).
         """
-        params = {**payload, "devId": str(dev_id), "externalPort": int(port)}
+        fields = {**payload, "devId": str(dev_id), "externalPort": int(port)}
+        extra = {"User-Agent": "okhttp/4.12.0"}
+
+        def headers() -> dict[str, str]:
+            h = {"token": self.token or ""}
+            if sign:
+                h.update(sign_headers(self.token or "", self.secret_id or "", self.request_app or ""))
+            return h
+
+        if transport == "form":
+            return self._request(
+                ADD_DEV_MODE_ENDPOINT, data=fields, headers=extra, header_fn=headers, retry_on_expired=False
+            )
         return self._request(
-            ADD_DEV_MODE_ENDPOINT,
-            params=params,
-            headers={"User-Agent": "okhttp/4.12.0"},
-            retry_on_expired=False,
+            ADD_DEV_MODE_ENDPOINT, params=fields, headers=extra, header_fn=headers, retry_on_expired=False
         )
 
     def get_automations_raw(self, dev_id: str | int) -> list[dict[str, Any]]:
@@ -537,6 +552,29 @@ class ACInfinityClient:
             return None
 
         return None
+
+
+SIGN_APP_VERSION = "2.0.8"
+
+
+def _md5(text: str) -> str:
+    import hashlib
+
+    return hashlib.md5(text.encode("utf-8")).hexdigest()  # noqa: S324 — protocol requirement
+
+
+def sign_headers(
+    token: str, secret_id: str, request_app: str, *, request_id: str | None = None, version: str = SIGN_APP_VERSION
+) -> dict[str, str]:
+    """App 2.0.8 request signing (decompiled; HA issue #157, Backroads4Me fork).
+
+    ``sign = md5(md5(token + version) + md5(secretId + requestApp + requestId))`` with
+    ``requestId`` = epoch milliseconds. Opt-in only (``ACINFINITY_SIGN_WRITES=1``) — unverified
+    against acdash's own controllers.
+    """
+    rid = request_id or str(int(time.time() * 1000))
+    sign = _md5(_md5(token + version) + _md5(secret_id + request_app + rid))
+    return {"sign": sign, "requestApp": request_app, "requestId": rid, "version": version}
 
 
 def _with_token(fields: dict[str, Any] | None, token: str | None) -> dict[str, Any] | None:

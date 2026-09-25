@@ -1208,6 +1208,12 @@
     }
 
     function pcmPopulate(s) {
+      var rr = document.getElementById('pcm-restore-row');
+      if (rr) {
+        rr.classList.toggle('hidden', !s.restore_available);
+        var when = document.getElementById('pcm-restore-when');
+        if (when) when.textContent = s.restore_ts ? '(' + new Date(s.restore_ts * 1000).toLocaleString() + ')' : '';
+      }
       pcmSelectMode(s.mode || 'manual');
       pcmSetState(s.state !== false);
       // Use != null checks throughout so speed=0 and schedule_begin_mins=0 (midnight) are preserved.
@@ -1419,11 +1425,95 @@
         if (data.ok) {
           closePortModal();
           if (window.acdashRefresh) window.acdashRefresh();
+          pcmHandleWriteResult(data, _pcmLabel());
         } else {
           errEl.textContent = data.error || 'Command failed';
           errEl.classList.remove('hidden');
         }
       }).catch(function() {
+        btn.disabled = false;
+        errEl.textContent = 'Network error — try again';
+        errEl.classList.remove('hidden');
+      });
+    }
+
+    // ─── Write verification (did the controller actually apply it?) ───
+    var _pcmToastTimer = null;
+    function _pcmLabel() {
+      var n = document.getElementById('pcm-port-name');
+      return (n ? n.textContent : 'Port') + ' (port ' + _pcmPort + ')';
+    }
+    function pcmToastHide() {
+      var t = document.getElementById('pcm-toast');
+      if (t) t.classList.add('hidden');
+      if (_pcmToastTimer) { clearTimeout(_pcmToastTimer); _pcmToastTimer = null; }
+    }
+    function pcmToast(kind, title, body) {
+      var t = document.getElementById('pcm-toast');
+      if (!t) return;
+      var styles = {
+        pending: ['border-zinc-700 bg-zinc-900/95 text-zinc-200', '⏳'],
+        ok: ['border-emerald-600/60 bg-emerald-950/90 text-emerald-200', '✓'],
+        warn: ['border-amber-600/60 bg-amber-950/90 text-amber-200', '⚠'],
+        info: ['border-zinc-700 bg-zinc-900/95 text-zinc-300', 'ℹ']
+      };
+      var st = styles[kind] || styles.info;
+      t.className = 'fixed bottom-4 right-4 z-[60] max-w-xs rounded-xl border px-4 py-3 text-xs shadow-2xl backdrop-blur ' + st[0];
+      document.getElementById('pcm-toast-icon').textContent = st[1];
+      document.getElementById('pcm-toast-title').textContent = title;
+      document.getElementById('pcm-toast-body').textContent = body || '';
+      if (_pcmToastTimer) { clearTimeout(_pcmToastTimer); _pcmToastTimer = null; }
+      if (kind === 'ok' || kind === 'info') _pcmToastTimer = setTimeout(pcmToastHide, 6000);
+    }
+    function pcmHandleWriteResult(data, label) {
+      if (data.status === 'no_change') {
+        pcmToast('info', label + ': already set', 'No command sent — the controller already has these settings.');
+        return;
+      }
+      if (data.status !== 'pending' || !data.verify_id) return;
+      pcmToast('pending', label + ': sent', 'Waiting for the controller to apply it (up to ' + Math.round(data.verify_seconds || 90) + 's)…');
+      var vid = data.verify_id;
+      var poll = function () {
+        fetch('/api/port-control/verify?id=' + encodeURIComponent(vid), {credentials: 'same-origin', cache: 'no-store'})
+          .then(function (r) { return r.json(); })
+          .then(function (v) {
+            if (v.status === 'applied') {
+              pcmToast('ok', label + ': applied', 'The controller confirmed the change.');
+              if (window.acdashRefresh) window.acdashRefresh();
+            } else if (v.status === 'not_applied') {
+              pcmToast('warn', label + ': controller did not apply the change', v.hint || '');
+              if (window.acdashRefresh) window.acdashRefresh();
+            } else if (v.status === 'pending') {
+              setTimeout(poll, 5000);
+            }
+          })
+          .catch(function () { setTimeout(poll, 10000); });
+      };
+      setTimeout(poll, 5000);
+    }
+    function restorePortSettings() {
+      var btn = document.getElementById('pcm-restore');
+      var errEl = document.getElementById('pcm-error');
+      if (!confirm('Restore this port to the settings it had before the last change?')) return;
+      btn.disabled = true;
+      errEl.classList.add('hidden');
+      var label = _pcmLabel();
+      fetch('/api/port-restore', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({dev_id: _pcmDevId, port: _pcmPort})
+      }).then(function (r) { return r.json(); }).then(function (data) {
+        btn.disabled = false;
+        if (data.ok) {
+          closePortModal();
+          if (window.acdashRefresh) window.acdashRefresh();
+          pcmHandleWriteResult(data, label + ' restore');
+        } else {
+          errEl.textContent = data.error || 'Restore failed';
+          errEl.classList.remove('hidden');
+        }
+      }).catch(function () {
         btn.disabled = false;
         errEl.textContent = 'Network error — try again';
         errEl.classList.remove('hidden');

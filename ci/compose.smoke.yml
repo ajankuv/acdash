@@ -19,6 +19,8 @@ services:
       - ACINFINITY_API_BASE=http://fake:9000/api
       - COLLECTOR_INTERVAL_SECONDS=5
       - CACHE_SECONDS=2
+      - WRITE_VERIFY_SECONDS=15
+      - ACINFINITY_WRITE_FORMAT=${ACINFINITY_WRITE_FORMAT:-query}
     volumes:
       - acdash_data:/app/data
 

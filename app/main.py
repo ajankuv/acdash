@@ -26,12 +26,14 @@ from app.control import (
     ControlError,
     RateLimitError,
     get_automations,
+    get_write_format,
     read_port_settings,
     write_port_control,
 )
 from app.history import fetch_history_for_chart, thin_points
 from app.normalize import normalize_devices
 from app.session import get_client, reset_client
+from app import verify
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
 logger = logging.getLogger(__name__)
@@ -342,6 +344,10 @@ def api_port_settings(
         return JSONResponse({"error": "Unauthorized"}, status_code=401)
     client = get_client(email, password)
     settings = read_port_settings(client, dev_id, port)
+    snap = storage.latest_settings_snapshot(dev_id, port)
+    settings["restore_available"] = snap is not None
+    settings["restore_ts"] = snap["ts"] if snap else None
+    settings["write_format"] = get_write_format()
     return JSONResponse(settings)
 
 
@@ -384,13 +390,69 @@ async def api_port_control(request: Request) -> JSONResponse:
     if not email or not password:
         return JSONResponse({"error": "Unauthorized"}, status_code=401)
     client = get_client(email, password)
+    return _write_and_verify(client, dev_id, port, changes)
+
+
+def _write_and_verify(
+    client: Any, dev_id: str, port: int, changes: dict[str, Any], *, restore_record: dict[str, Any] | None = None
+) -> JSONResponse:
+    """Send a port write, then verify it against live device state in the background.
+
+    Response keeps ``ok: true`` for older frontends and adds ``status`` (``pending`` /
+    ``no_change``), ``verify_id`` and ``format``.
+    """
     try:
-        write_port_control(client, dev_id, port, changes)
+        out = write_port_control(client, dev_id, port, changes, restore_record=restore_record)
     except RateLimitError as e:
         return JSONResponse({"error": str(e)}, status_code=429)
     except ControlError as e:
         return JSONResponse({"error": str(e)}, status_code=400)
-    return JSONResponse({"ok": True})
+    _clear_cache()
+    if out.get("status") == "no_change":
+        return JSONResponse({"ok": True, "status": "no_change", "format": out.get("format")})
+    vid = verify.start(client, dev_id, port, out.get("expected") or {}, fmt=str(out.get("format")),
+                       on_done=_clear_cache)
+    return JSONResponse({"ok": True, "status": "pending", "verify_id": vid, "format": out.get("format"),
+                         "verify_seconds": verify.verify_window_seconds()})
+
+
+@app.get("/api/port-control/verify")
+def api_port_control_verify(id: str = Query("", alias="id")) -> JSONResponse:
+    """Result of a write verification started by /api/port-control or /api/port-restore."""
+    if not credentials_configured():
+        return JSONResponse({"error": "Unauthorized"}, status_code=401)
+    result = verify.get_result(id.strip())
+    if result is None:
+        return JSONResponse({"error": "Unknown verify id"}, status_code=404)
+    return JSONResponse(result, headers={"Cache-Control": "no-store"})
+
+
+@app.post("/api/port-restore")
+async def api_port_restore(request: Request) -> JSONResponse:
+    """Write a port's most recent pre-write snapshot back (same write + verify path)."""
+    if not credentials_configured():
+        return JSONResponse({"error": "Unauthorized"}, status_code=401)
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error": "Invalid JSON"}, status_code=400)
+    dev_id = str(body.get("dev_id") or "").strip()
+    try:
+        port = int(body.get("port"))
+        if not (1 <= port <= 8):
+            raise ValueError
+    except (TypeError, ValueError):
+        return JSONResponse({"error": "port must be an integer between 1 and 8"}, status_code=400)
+    if not dev_id:
+        return JSONResponse({"error": "dev_id is required"}, status_code=400)
+    snap = storage.latest_settings_snapshot(dev_id, port)
+    if snap is None:
+        return JSONResponse({"error": "No saved settings for this port yet"}, status_code=404)
+    email, password = _get_credentials()
+    if not email or not password:
+        return JSONResponse({"error": "Unauthorized"}, status_code=401)
+    client = get_client(email, password)
+    return _write_and_verify(client, dev_id, port, {}, restore_record=snap["record"])
 
 
 @app.get("/api/automations")

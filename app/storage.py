@@ -36,6 +36,24 @@ CREATE TABLE IF NOT EXISTS controller_meta (
 """
 
 
+_CREATE_SNAPSHOT_TABLE = """
+CREATE TABLE IF NOT EXISTS settings_snapshots (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    dev_id      TEXT    NOT NULL,
+    port        INTEGER NOT NULL,
+    ts          INTEGER NOT NULL,
+    record_json TEXT    NOT NULL,
+    source      TEXT    NOT NULL DEFAULT 'write'
+);
+"""
+
+_CREATE_SNAPSHOT_INDEX = """
+CREATE INDEX IF NOT EXISTS idx_snap_dev_port ON settings_snapshots (dev_id, port, id);
+"""
+
+SNAPSHOTS_KEPT_PER_PORT = 20
+
+
 def _connect() -> sqlite3.Connection:
     conn = sqlite3.connect(DB_PATH, check_same_thread=False)
     conn.row_factory = sqlite3.Row
@@ -50,6 +68,8 @@ def init_db() -> None:
             conn.execute(_CREATE_TABLE)
             conn.execute(_CREATE_INDEX)
             conn.execute(_CREATE_META_TABLE)
+            conn.execute(_CREATE_SNAPSHOT_TABLE)
+            conn.execute(_CREATE_SNAPSHOT_INDEX)
         logger.info("history db ready: %s", DB_PATH)
     except Exception:
         logger.exception("failed to init history db at %s", DB_PATH)
@@ -139,3 +159,56 @@ def query_readings(dev_id: str, start_ts: int, end_ts: int) -> list[dict[str, An
     except Exception:
         logger.exception("query_readings failed")
         return []
+
+
+def save_settings_snapshot(dev_id: str, port: int, record: dict[str, Any], source: str = "write") -> None:
+    """Store a port's full pre-write settings record; keep the newest SNAPSHOTS_KEPT_PER_PORT."""
+    try:
+        with _connect() as conn:
+            conn.execute(
+                "INSERT INTO settings_snapshots (dev_id, port, ts, record_json, source) VALUES (?, ?, ?, ?, ?)",
+                (dev_id, int(port), int(time.time()), json.dumps(record), source),
+            )
+            conn.execute(
+                """
+                DELETE FROM settings_snapshots
+                WHERE dev_id=? AND port=? AND id NOT IN (
+                    SELECT id FROM settings_snapshots WHERE dev_id=? AND port=?
+                    ORDER BY id DESC LIMIT ?
+                )
+                """,
+                (dev_id, int(port), dev_id, int(port), SNAPSHOTS_KEPT_PER_PORT),
+            )
+    except Exception:
+        logger.exception("save_settings_snapshot failed for dev_id=%s port=%s", dev_id, port)
+
+
+def latest_settings_snapshot(dev_id: str, port: int) -> dict[str, Any] | None:
+    """Newest stored snapshot for a port: ``{id, ts, record, source}`` or None."""
+    try:
+        with _connect() as conn:
+            row = conn.execute(
+                """
+                SELECT id, ts, record_json, source FROM settings_snapshots
+                WHERE dev_id=? AND port=? ORDER BY id DESC LIMIT 1
+                """,
+                (dev_id, int(port)),
+            ).fetchone()
+        if row is None:
+            return None
+        return {"id": row["id"], "ts": row["ts"], "record": json.loads(row["record_json"]), "source": row["source"]}
+    except Exception:
+        logger.exception("latest_settings_snapshot failed for dev_id=%s port=%s", dev_id, port)
+        return None
+
+
+def count_settings_snapshots(dev_id: str, port: int) -> int:
+    try:
+        with _connect() as conn:
+            row = conn.execute(
+                "SELECT COUNT(*) FROM settings_snapshots WHERE dev_id=? AND port=?", (dev_id, int(port))
+            ).fetchone()
+        return row[0] if row else 0
+    except Exception:
+        logger.exception("count_settings_snapshots failed")
+        return 0

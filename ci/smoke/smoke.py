@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import time
 import urllib.error
@@ -100,6 +101,60 @@ def dashboard_checks(app: str) -> None:
     check("GET /api/automations ok", st == 200, f"status={st}")
 
 
+def post_json(url: str, payload: dict) -> tuple[int, dict]:
+    st, _, body = req("POST", url, data=json.dumps(payload).encode(), ctype="application/json")
+    try:
+        return st, json.loads(body)
+    except ValueError:
+        return st, {"raw": body[:200]}
+
+
+def wait_verify(app: str, vid: str, seconds: float = 40) -> dict:
+    deadline = time.time() + seconds
+    last: dict = {}
+    while time.time() < deadline:
+        st, _, body = req("GET", f"{app}/api/port-control/verify?id={vid}")
+        if st == 200:
+            last = json.loads(body)
+            if last.get("status") != "pending":
+                return last
+        time.sleep(2)
+    return last
+
+
+def write_verification_checks(app: str, fake: str) -> None:
+    time.sleep(1.6)  # write spacing
+    st, out = post_json(f"{app}/api/port-control", {"dev_id": DEV1, "port": 3, "mode": "manual", "state": True, "speed": 4})
+    check("write returns pending + verify id", st == 200 and out.get("status") == "pending" and out.get("verify_id"), str(out))
+    res = wait_verify(app, out.get("verify_id", ""))
+    check("controller applied write → status applied", res.get("status") == "applied", str(res))
+
+    time.sleep(1.6)
+    st, out = post_json(f"{app}/api/port-control", {"dev_id": DEV1, "port": 3, "mode": "manual", "state": True, "speed": 4})
+    check("identical write → no_change, nothing sent", out.get("status") == "no_change", str(out))
+
+    req("POST", f"{fake}/__behavior", data=json.dumps({"ignore_writes": True}).encode(), ctype="application/json")
+    time.sleep(1.6)
+    st, out = post_json(f"{app}/api/port-control", {"dev_id": DEV1, "port": 3, "mode": "manual", "state": True, "speed": 9})
+    res = wait_verify(app, out.get("verify_id", ""))
+    check("device ignores write → status not_applied with hint", res.get("status") == "not_applied"
+          and "ACINFINITY_WRITE_FORMAT" in (res.get("hint") or ""), str(res))
+    req("POST", f"{fake}/__behavior", data=json.dumps({"ignore_writes": False}).encode(), ctype="application/json")
+
+    st, _, body = req("GET", f"{app}/api/port-settings?dev_id={DEV1}&port=3")
+    check("port-settings offers restore", json.loads(body).get("restore_available") is True, body[:200])
+    time.sleep(1.6)
+    st, out = post_json(f"{app}/api/port-restore", {"dev_id": DEV1, "port": 3})
+    writes = json.loads(req("GET", f"{fake}/__writes")[2])
+    last = {**writes[-1].get("query", {}), **writes[-1].get("form", {})}
+    check("restore writes previous settings back", out.get("status") == "pending" and last.get("onSpead") == "4",
+          f"{out} last_onSpead={last.get('onSpead')}")
+
+    time.sleep(1.6)
+    st, out = post_json(f"{app}/api/port-control", {"dev_id": DEV1, "port": 4, "mode": "manual", "state": True, "speed": 5})
+    check("empty port (portResistance 65535) → clear error", st == 400 and "Nothing is plugged" in out.get("error", ""), str(out))
+
+
 def phase_fresh(app: str, fake: str) -> None:
     check("app /health", wait_for(f"{app}/health"), "never healthy")
     check("fake /health", wait_for(f"{fake}/health"), "never healthy")
@@ -138,10 +193,16 @@ def phase_fresh(app: str, fake: str) -> None:
     fields = {**last.get("query", {}), **last.get("form", {})}
     check("write reached fake API with full record", fields.get("onSpead") == "7" and fields.get("devId") == DEV1
           and fields.get("externalPort") == "1", f"writes={len(writes)} last={str(last)[:300]}")
+    want = (os.environ.get("ACINFINITY_WRITE_FORMAT") or "query").strip().lower()
+    ok_shape = (last.get("transport") == want) and (
+        ("devSetting" not in fields and "modeSetid" not in fields) if want == "form" else "devSetting" in fields)
+    check(f"write used the '{want}' format", ok_shape, f"transport={last.get('transport')} keys={sorted(fields)[:12]}")
 
     st, _, body = req("POST", f"{app}/api/port-control",
                       data=json.dumps({"dev_id": DEV1, "port": 99}).encode(), ctype="application/json")
     check("invalid port rejected with 400", st == 400, f"status={st}")
+
+    write_verification_checks(app, fake)
 
     # Let the collector (5 s interval in the smoke stack) store at least one reading.
     time.sleep(12)

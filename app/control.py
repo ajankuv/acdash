@@ -2,12 +2,17 @@
 from __future__ import annotations
 
 import json
+import logging
 import math
+import os
+import threading
 import time
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from app.client import ACInfinityClient
+
+logger = logging.getLogger(__name__)
 
 # atType integer codes from AC Infinity app (jadx qv0.java switch on atType)
 AT_TYPE_OFF = 1        # port disabled — uses offSpead
@@ -32,6 +37,71 @@ _AT_TYPE_TO_MODE: dict[int, str] = {
 
 _RATE_LIMIT_SECS = 1.5
 _last_write_ts: float = float("-inf")  # sentinel: never written
+_write_lock = threading.Lock()  # process-wide: spacing holds across concurrent requests
+
+# ── Write formats ───────────────────────────────────────────────────
+# "query": acdash's original recipe — the COMPLETE settings record in the query string,
+#          nested devSetting as JSON, bools as "true"/"false" (dalinicus HA client).
+# "form":  what the form-body clients send (ober37 ac-infinity-mcp, keithah homebridge,
+#          decompiled app 2.0.8 per HA #157): form-urlencoded body, the app's field set only
+#          (no devSetting / read-only status fields), bools 0/1, no modeSetid.
+WRITE_FORMATS = ("query", "form")
+DEFAULT_WRITE_FORMAT = "query"
+LEGACY_DEV_TYPES = frozenset({11})
+
+# dalinicus DeviceControlKey (minus devSetting) ∪ keithah's captured app payload.
+APP_WRITE_FIELDS: frozenset[str] = frozenset("""
+devId externalPort modeType masterPort surplus onSpead offSpead onSelfSpead atType
+powerState power loadState loadType speak abnormalState toward schedStartTime schedEndtTime
+acitveTimerOn acitveTimerOff activeCycleOn activeCycleOff activeHtVpd activeHtVpdNums
+activeLtVpd activeLtVpdNums vpdstatus vpdnums vpdSettingMode targetVpd targetVpdSwitch
+isUpdateVpdNums devHt activeHt devLt activeLt temperature targetTemp targetTSwitch insideTemp
+outsideTemp devHtf devLtf temperatureF targetTempF devHh activeHh devLh activeLh humidity
+targetHumi targetHumiSwitch photocellSwitch trend tTrend hTrend insideTrend outsideTrend unit
+ecOrTds ecUnit tdsUnit ecTdsSettingMode ecTdsAccuracy ecTdsTargetSwitch ecTdsTargetValueEcUs
+ecTdsTargetValueEcMs ecTdsTargetValueTdsPpm ecTdsTargetValueTdsPpt ecTdsHighSwitch
+ecTdsHighValueEcUs ecTdsHighValueEcMs ecTdsHighValueTdsPpm ecTdsHighValueTdsPpt
+ecTdsLowSwitchEc ecTdsLowSwitchTds ecTdsLowValueEcUs ecTdsLowValueEcMs ecTdsLowValueTdsPpm
+ecTdsLowValueTdsPpt phSettingMode phAccuracy phTargetSwitch phTargetValue phHighSwitch
+phHighValue phLowSwitch phLowValue moistureSettingMode moistureAccuracy moistureTargetSwitch
+moistureTargetValue moistureHighSwitch moistureHighValue moistureLowSwitch moistureLowValue
+waterLevelSettingMode waterLevelAccuracy waterLevelTargetSwitch waterLevelTargetValue
+waterLevelHighSwitch waterLevelHighValue waterLevelLowSwitch waterLevelLowValue
+waterTempSettingMode waterTempAccuracy waterTempTargetSwitch waterTempTargetValue
+waterTempHighSwitch waterTempHighValue waterTempLowSwitch waterTempLowValue
+waterTempTargetValueF waterTempHighValueF waterTempLowValueF isOpenAutomation settingMode
+onlyUpdateSpeed co2FanHighSwitch co2FanHighValue co2LowSwitch co2LowValue devMacAddr
+insidePort outsidePort insideType outsideType settingModeAi vpdSettingModeAi targetTempFAi
+""".split())
+
+# Fields the app always sends; when the read omits them, send these instead of 0
+# (0 means "port 0 / sensor type 0" and is rejected — HA #157).
+FORM_SENTINELS: dict[str, Any] = {
+    "insidePort": 255,
+    "outsidePort": 255,
+    "insideType": 15,
+    "outsideType": 15,
+    "settingModeAi": 1,
+    "vpdSettingModeAi": 1,
+    "targetTempFAi": 32,
+    "devMacAddr": "",
+    "schedStartTime": 65535,
+    "schedEndtTime": 65535,
+}
+
+# Overlay keys that are acdash bookkeeping, not API fields.
+_NON_API_OVERLAY_KEYS = frozenset({"port"})
+
+
+def get_write_format() -> str:
+    """``ACINFINITY_WRITE_FORMAT`` (``query`` default | ``form``); invalid values warn → default."""
+    raw = (os.environ.get("ACINFINITY_WRITE_FORMAT") or "").strip().lower()
+    if not raw:
+        return DEFAULT_WRITE_FORMAT
+    if raw not in WRITE_FORMATS:
+        logger.warning("Invalid ACINFINITY_WRITE_FORMAT=%r; using %r", raw, DEFAULT_WRITE_FORMAT)
+        return DEFAULT_WRITE_FORMAT
+    return raw
 
 # Valid ranges — clamp before sending to AC Infinity API
 _SPEED_MIN, _SPEED_MAX = 0, 10
@@ -358,30 +428,129 @@ def _raw_record(body: dict[str, Any] | None) -> dict[str, Any]:
 
 
 def build_write_payload(
-    raw_record: dict[str, Any], overlay: dict[str, Any]
+    raw_record: dict[str, Any],
+    overlay: dict[str, Any],
+    fmt: str = "query",
+    *,
+    dev_type: int | None = None,
 ) -> dict[str, Any]:
-    """Full read-modify-write payload for addDevMode (mirrors the dalinicus HA client).
+    """Full read-modify-write payload for addDevMode.
 
-    AC Infinity's addDevMode rejects a PARTIAL payload with the generic error code
-    999999. The working recipe is to echo the COMPLETE current settings record back
-    with only the changed fields overlaid. Serialize like the app does:
-      - None        → 0
-      - dict / list → compact JSON string (e.g. the nested ``devSetting`` object)
-      - bool        → "true" / "false"
-      - everything else passes through unchanged.
+    ``query`` (default, original acdash recipe — mirrors the dalinicus HA client): echo the
+    COMPLETE current record with the changed fields overlaid. None → 0, dict/list → compact
+    JSON string (e.g. nested ``devSetting``), bool → "true"/"false".
+
+    ``form`` (form-body clients): only ``APP_WRITE_FIELDS`` plus changed keys; nested
+    dict/list values dropped; bool → 1/0; None → 0; ``modeSetid`` never sent; missing
+    app fields get ``FORM_SENTINELS``; manual On with speed > 0 on a non-legacy controller
+    forces ``modeType=2`` (legacy devType 11 keeps the reported value).
     """
     merged = {**(raw_record or {}), **overlay}
     out: dict[str, Any] = {}
+    if fmt != "form":
+        for k, v in merged.items():
+            if v is None:
+                out[k] = 0
+            elif isinstance(v, (dict, list)):
+                out[k] = json.dumps(v, separators=(",", ":"))
+            elif isinstance(v, bool):
+                out[k] = str(v).lower()
+            else:
+                out[k] = v
+        return out
+
+    keep = APP_WRITE_FIELDS | (set(overlay) - _NON_API_OVERLAY_KEYS)
     for k, v in merged.items():
+        if k not in keep or isinstance(v, (dict, list)):
+            continue
         if v is None:
             out[k] = 0
-        elif isinstance(v, (dict, list)):
-            out[k] = json.dumps(v, separators=(",", ":"))
         elif isinstance(v, bool):
-            out[k] = str(v).lower()
+            out[k] = 1 if v else 0
         else:
             out[k] = v
+    for k, v in FORM_SENTINELS.items():
+        out.setdefault(k, v)
+    out.pop("modeSetid", None)
+    try:
+        at_type = int(out.get("atType", 0))
+        on_speed = int(out.get("onSpead", 0))
+    except (TypeError, ValueError):
+        at_type, on_speed = 0, 0
+    if dev_type not in LEGACY_DEV_TYPES and at_type == AT_TYPE_ON and on_speed > 0:
+        out["modeType"] = 2
     return out
+
+
+def is_noop(raw_record: dict[str, Any], overlay: dict[str, Any]) -> bool:
+    """True when every API field in the overlay already equals the stored record."""
+    for k, v in overlay.items():
+        if k in _NON_API_OVERLAY_KEYS or k == "devId":
+            continue
+        cur = raw_record.get(k)
+        try:
+            if cur is None or int(cur) != int(v):
+                return False
+        except (TypeError, ValueError):
+            if str(cur) != str(v):
+                return False
+    return True
+
+
+def expected_state(overlay: dict[str, Any]) -> dict[str, Any]:
+    """What the controller should report once it applies the write (used by verification)."""
+    at_type = int(overlay.get("atType") or 0)
+    exp: dict[str, Any] = {"atType": at_type}
+    if at_type == AT_TYPE_OFF:
+        exp["speed"] = 0
+    elif at_type == AT_TYPE_ON:
+        exp["speed"] = int(overlay.get("onSpead") or 0)
+    return exp
+
+
+def _port_record(devices: list[dict[str, Any]], dev_id: str, port: int) -> tuple[dict[str, Any], dict[str, Any]]:
+    for d in devices or []:
+        if str(d.get("devId")) == str(dev_id):
+            for p in (d.get("deviceInfo") or {}).get("ports") or []:
+                try:
+                    if int(p.get("port")) == int(port):
+                        return d, p
+                except (TypeError, ValueError):
+                    continue
+            return d, {}
+    return {}, {}
+
+
+def explain_write_failure(
+    client: "ACInfinityClient", dev_id: str, port: int, result: dict[str, Any], *, http_status: int | None = None
+) -> str:
+    """Turn a failed addDevMode response into a specific, actionable message."""
+    code = result.get("code")
+    msg = str(result.get("msg") or "")
+    if (code == 403 or http_status == 403) and "saving failed" in msg.lower():
+        return "Too many changes too quickly — wait a few seconds and try again."
+    if code == 999999:
+        device, port_rec = {}, {}
+        try:
+            device, port_rec = _port_record(client.get_devices(), dev_id, port)
+        except Exception:  # noqa: BLE001 — diagnosis is best-effort
+            logger.debug("could not load devices to explain 999999", exc_info=True)
+        try:
+            if int(port_rec.get("portResistance", -1)) == 65535:
+                return "Nothing is plugged into this port."
+        except (TypeError, ValueError):
+            pass
+        if str(device.get("isShare", "0")) == "1":
+            return "Shared controllers can't be controlled from this account."
+        try:
+            if int(port_rec.get("isOpenAutomation") or 0) == 1:
+                return "This port is under an Advance Automation — turn it off in the app first."
+        except (TypeError, ValueError):
+            pass
+        return f"AC Infinity rejected the command (code 999999: {msg or 'operation failed'})."
+    if msg:
+        return f"AC Infinity rejected the command (code {code}): {msg}"
+    return f"Command failed (code {code})"
 
 
 def write_port_control(
@@ -389,42 +558,68 @@ def write_port_control(
     dev_id: str,
     port: int,
     changes: dict[str, Any],
-) -> None:
-    """Apply port control changes. Enforces rate limit and read-before-write.
+    *,
+    restore_record: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Apply port control changes (or restore a snapshot). Read-before-write, spaced, snapshotted.
+
+    Returns ``{"status": "sent" | "no_change", "format", "expected"}``; verification of the
+    live device state is done separately (app.verify).
 
     Raises:
-        RateLimitError: if called again within 1.5s
-        ControlError: if API rejects the command
+        RateLimitError: if called again within 1.5s of the previous write
+        ControlError: if the pre-write read fails or the API rejects the command
     """
-    _rate_limit()
-    # Read the FULL current record (not just the normalized view) so the write can
-    # echo every field back — addDevMode rejects partial payloads with code 999999.
-    raw_body = client.get_dev_mode_setting_list(dev_id, port)
-    raw_record = _raw_record(raw_body)
-    if not raw_record:
-        # Do NOT fall back to defaults and send a partial payload — AC Infinity
-        # silently resets omitted fields to 0 on a partial write (and may still
-        # return 200), which reads as "the command did nothing." Abort loudly
-        # instead so the failure is visible.
-        raise ControlError("Could not read current port settings — refusing to send a partial write. Try again.")
-    current = normalize_port_settings([raw_record])
-    overlay = build_mode_payload(dev_id, port, current, changes)
-    payload = build_write_payload(raw_record, overlay)
-    result = client.set_port_mode(dev_id, port, payload)
+    from app import storage  # local import keeps control importable without a DB
+
+    with _write_lock:
+        _rate_limit()
+        # Read the FULL current record (not just the normalized view) so the write can
+        # echo every field back — addDevMode rejects partial payloads with code 999999.
+        raw_body = client.get_dev_mode_setting_list(dev_id, port)
+        raw_record = _raw_record(raw_body)
+        if not raw_record:
+            # Do NOT fall back to defaults and send a partial payload — AC Infinity
+            # silently resets omitted fields to 0 on a partial write (and may still
+            # return 200), which reads as "the command did nothing." Abort loudly
+            # instead so the failure is visible.
+            raise ControlError("Could not read current port settings — refusing to send a partial write. Try again.")
+
+        if restore_record is not None:
+            overlay = {
+                k: v for k, v in restore_record.items()
+                if k in APP_WRITE_FIELDS and k not in ("devId", "externalPort") and not isinstance(v, (dict, list))
+            }
+            overlay["devId"] = str(dev_id)
+        else:
+            current = normalize_port_settings([raw_record])
+            overlay = build_mode_payload(dev_id, port, current, changes)
+
+        fmt = get_write_format()
+        if is_noop(raw_record, overlay):
+            return {"status": "no_change", "format": fmt, "expected": expected_state({**raw_record, **overlay})}
+
+        dev_type = getattr(client, "_dev_types", {}).get(str(dev_id))
+        payload = build_write_payload(raw_record, overlay, fmt, dev_type=dev_type)
+        storage.save_settings_snapshot(dev_id, port, raw_record, "restore" if restore_record is not None else "write")
+        result = client.set_port_mode(dev_id, port, payload, transport=fmt, sign=signing_enabled())
+
     if result is None:
         raise ControlError("Could not reach AC Infinity — check your connection")
     if not isinstance(result, dict):
-        return
+        return {"status": "sent", "format": fmt, "expected": expected_state({**raw_record, **overlay})}
     code = result.get("code")
     msg_l = str(result.get("msg") or "").lower()
     if code == 10003 or ("login expired" in msg_l or "login again" in msg_l):
         # The client already renewed the session but deliberately did not resend the write.
         raise ControlError("AC Infinity session had expired and was renewed — please apply the change again.")
     if code is not None and code != 200:
-        # 999999 is a generic "operation failed" from the API (not specifically an
-        # automation lock) — surface whatever message the server returned.
-        msg = str(result.get("msg") or "")
-        raise ControlError(f"AC Infinity rejected the command: {msg}" if msg else "Command failed")
+        raise ControlError(explain_write_failure(client, dev_id, port, result))
+    return {"status": "sent", "format": fmt, "expected": expected_state({**raw_record, **overlay})}
+
+
+def signing_enabled() -> bool:
+    return (os.environ.get("ACINFINITY_SIGN_WRITES") or "").strip().lower() in ("1", "true", "yes", "on")
 
 
 def normalize_automations(raw_list: list[dict[str, Any]]) -> list[dict[str, Any]]:

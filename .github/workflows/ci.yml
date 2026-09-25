@@ -58,9 +58,15 @@ jobs:
       - name: Image hygiene
         run: ci/smoke/hygiene.sh acdash:ci
 
-      - name: Smoke test (fake AC Infinity API)
+      - name: Smoke test (fake AC Infinity API, default query write format)
         env:
           ACDASH_IMAGE: acdash:ci
+        run: ci/smoke/run.sh
+
+      - name: Smoke test (form write format)
+        env:
+          ACDASH_IMAGE: acdash:ci
+          ACINFINITY_WRITE_FORMAT: form
         run: ci/smoke/run.sh
 
       - name: Vulnerability scan (report)
