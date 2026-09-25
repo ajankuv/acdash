@@ -401,7 +401,13 @@ def write_port_control(
     # echo every field back — addDevMode rejects partial payloads with code 999999.
     raw_body = client.get_dev_mode_setting_list(dev_id, port)
     raw_record = _raw_record(raw_body)
-    current = normalize_port_settings([raw_record] if raw_record else [])
+    if not raw_record:
+        # Do NOT fall back to defaults and send a partial payload — AC Infinity
+        # silently resets omitted fields to 0 on a partial write (and may still
+        # return 200), which reads as "the command did nothing." Abort loudly
+        # instead so the failure is visible.
+        raise ControlError("Could not read current port settings — refusing to send a partial write. Try again.")
+    current = normalize_port_settings([raw_record])
     overlay = build_mode_payload(dev_id, port, current, changes)
     payload = build_write_payload(raw_record, overlay)
     result = client.set_port_mode(dev_id, port, payload)
