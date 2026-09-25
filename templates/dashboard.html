@@ -987,6 +987,7 @@
             if (winH != null && winH > 0) lines.push("Requested window ~" + winH + " h");
             if (spanH != null && spanH > 0) lines.push("Data time span ~" + spanH + " h (first → last point)");
             if (meta.valid_from) lines.push("cloud validFrom " + meta.valid_from);
+            if (meta.backfilled_points) lines.push(meta.backfilled_points + " point(s) filled in from AC Infinity cloud history (gaps while AC Dash was offline)");
             if (pts.length === 0) {
               lines.push("No rows in this window — try a shorter range.");
             }

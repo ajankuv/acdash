@@ -20,6 +20,7 @@ services:
       - COLLECTOR_INTERVAL_SECONDS=5
       - CACHE_SECONDS=2
       - WRITE_VERIFY_SECONDS=15
+      - BACKFILL_DAYS=1
       - ACINFINITY_WRITE_FORMAT=${ACINFINITY_WRITE_FORMAT:-query}
     volumes:
       - acdash_data:/app/data

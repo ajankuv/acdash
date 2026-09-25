@@ -18,7 +18,7 @@ from fastapi import FastAPI, Form, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
-from app import storage
+from app import backfill, storage
 from app.client import ACInfinityClient
 from app.collector import COLLECTOR_INTERVAL, collector_loop
 from app.debug_bundle import collect_debug_bundle
@@ -74,14 +74,30 @@ def _get_controllers_for_collector() -> list[dict]:
     return controllers
 
 
+def _get_client_for_backfill() -> Any:
+    email, password = _get_credentials()
+    if not email or not password:
+        return None
+    return get_client(email, password)
+
+
+def _get_dev_ids_for_backfill() -> list[str]:
+    return [str(c["id"]) for c in _get_controllers_for_collector() if c.get("id")]
+
+
 @asynccontextmanager
 async def lifespan(_app: FastAPI):  # noqa: RUF029
     storage.init_db()
-    task = asyncio.create_task(collector_loop(_get_controllers_for_collector))
+    tasks = [
+        asyncio.create_task(collector_loop(_get_controllers_for_collector)),
+        asyncio.create_task(backfill.backfill_loop(_get_client_for_backfill, _get_dev_ids_for_backfill)),
+    ]
     yield
-    task.cancel()
-    with contextlib.suppress(asyncio.CancelledError):
-        await task
+    for task in tasks:
+        task.cancel()
+    for task in tasks:
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
 
 
 app = FastAPI(title="AC Dash", version="0.1.0", lifespan=lifespan)
@@ -267,6 +283,7 @@ def ac_infinity_debug_dump() -> JSONResponse:
     )
     if isinstance(bundle.get("acdash"), dict):
         bundle["acdash"]["note"] = note
+        bundle["acdash"]["backfill"] = backfill.debug_status()
     return JSONResponse(
         bundle,
         headers={"Cache-Control": "no-store, no-cache", "Pragma": "no-cache"},
@@ -597,6 +614,7 @@ def api_history_chart(
         span_secs = (thinned[-1]["t"] - thinned[0]["t"]) if len(thinned) >= 2 else 0
         local_meta = {
             "source": "local",
+            "backfilled_points": sum(1 for p in local_points if p.get("source") == "cloud"),
             "points": len(thinned),
             "points_unthinned": local_count,
             "hours_requested": hours,

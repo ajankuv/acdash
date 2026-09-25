@@ -116,6 +116,7 @@ ACINFINITY_PASSWORD=yourpassword
 | `LOG_LEVEL` | `INFO` | `INFO` or `DEBUG` |
 | `ENV_FILE_PATH` | `/app/data/.env` | Where wizard-saved credentials are written |
 | `ACDASH_USE_ENV_CREDENTIALS` | — | Set to `1` to use `ACINFINITY_EMAIL`/`PASSWORD` from env instead of the wizard |
+| `BACKFILL_DAYS` | `30` | Fill gaps in local history (downtime, new install) from AC Infinity's cloud history, up to this many days back (max 90). `0` turns it off. Runs at startup and every 6 h; never overwrites local readings |
 | `ACINFINITY_WRITE_FORMAT` | `query` | How port changes are sent: `query` (original) or `form` (form body, app field set — what other working clients use). Try `form` if changes show "controller did not apply" |
 | `WRITE_VERIFY_SECONDS` | `90` | How long to watch the controller's live state after a change before reporting "did not apply" |
 | `ACINFINITY_SIGN_WRITES` | — | Set to `1` to add the newer app's request-signing headers to writes (experimental) |

@@ -32,6 +32,16 @@ BEFORE=$(count_rows)
 echo "history rows before restart: $BEFORE"
 if [ "$BEFORE" -lt 1 ]; then echo "FAIL  collector stored no readings"; exit 1; fi
 
+count_cloud() {
+  "${COMPOSE[@]}" exec -T acdash python -c \
+    "import sqlite3; print(sqlite3.connect('/app/data/history.db').execute(\"select count(*) from readings where source='cloud'\").fetchone()[0])"
+}
+CLOUD=0
+for _ in $(seq 1 30); do CLOUD=$(count_cloud); [ "$CLOUD" -gt 0 ] && break; sleep 2; done
+echo "backfilled cloud rows: $CLOUD"
+if [ "$CLOUD" -lt 100 ]; then echo "FAIL  backfill did not fill the new-install gap"; exit 1; fi
+echo "PASS  backfill filled history from the (fake) cloud"
+
 "${COMPOSE[@]}" restart acdash
 "${COMPOSE[@]}" up -d --wait --wait-timeout 90 acdash
 
