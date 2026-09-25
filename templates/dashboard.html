@@ -2,6 +2,7 @@
 {% block modals %}
   {% include "partials/control_modal.html" %}
   {% include "partials/automations_modal.html" %}
+  {% include "partials/activity_modal.html" %}
 {% endblock %}
 {% block content %}
   <div id="dashboard-error">
@@ -1519,6 +1520,81 @@
         errEl.textContent = 'Network error — try again';
         errEl.classList.remove('hidden');
       });
+    }
+
+    // ─── Activity (controller event log) ──────────────────────────────
+    var _actDevId = null;
+    var _ACT_STYLE = {
+      mode: 'bg-sky-500', alert: 'bg-red-500', notice: 'bg-amber-500', ai: 'bg-violet-500', unknown: 'bg-zinc-500'
+    };
+    function openActivityModal(devId, port) {
+      _actDevId = devId;
+      var ctrls = window.__ACDASH_CONTROLLERS__ || [];
+      var ctrl = ctrls.find ? ctrls.find(function (c) { return c.id === devId; }) : null;
+      var sub = (ctrl ? ctrl.name + ' · ' : '') + (port ? 'Port ' + port + ' · ' : '') + 'Last 24 hours';
+      document.getElementById('act-sub').textContent = sub;
+      document.getElementById('act-filter').classList.toggle('hidden', !port);
+      document.getElementById('act-error').classList.add('hidden');
+      var list = document.getElementById('act-list');
+      list.innerHTML = '<li class="text-center text-xs text-zinc-600">Loading…</li>';
+      var modal = document.getElementById('activity-modal');
+      modal.classList.remove('hidden');
+      modal.classList.add('flex');
+      var url = '/api/activity?dev_id=' + encodeURIComponent(devId) + (port ? '&port=' + encodeURIComponent(port) : '');
+      fetch(url, {credentials: 'same-origin', cache: 'no-store'})
+        .then(function (r) { return r.json(); })
+        .then(function (data) {
+          if (data.error && !(data.events && data.events.length)) {
+            var err = document.getElementById('act-error');
+            err.textContent = data.error;
+            err.classList.remove('hidden');
+          }
+          var evs = data.events || [];
+          list.innerHTML = '';
+          if (!evs.length) {
+            list.innerHTML = '<li class="py-4 text-center text-xs text-zinc-500">No activity in the last 24 hours</li>';
+            return;
+          }
+          evs.forEach(function (e) {
+            var li = document.createElement('li');
+            li.className = 'flex items-start gap-2 rounded-lg px-2 py-1.5 text-xs hover:bg-white/5';
+            var dot = document.createElement('span');
+            dot.className = 'mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full ' + (_ACT_STYLE[e.category] || _ACT_STYLE.unknown);
+            var body = document.createElement('div');
+            body.className = 'min-w-0 flex-1';
+            var text = document.createElement('div');
+            text.className = 'text-zinc-200';
+            text.textContent = e.text;
+            var when = document.createElement('div');
+            when.className = 'text-[10px] text-zinc-500';
+            when.textContent = e.time ? new Date(e.time * 1000).toLocaleString() : '';
+            body.appendChild(text); body.appendChild(when);
+            li.appendChild(dot); li.appendChild(body);
+            list.appendChild(li);
+          });
+          if (data.truncated) {
+            var more = document.createElement('li');
+            more.className = 'pt-1 text-center text-[10px] text-zinc-600';
+            more.textContent = 'Showing the most recent ' + evs.length + ' events';
+            list.appendChild(more);
+          }
+        })
+        .catch(function () {
+          var err = document.getElementById('act-error');
+          err.textContent = 'Could not load activity — try again';
+          err.classList.remove('hidden');
+          list.innerHTML = '';
+        });
+    }
+    function closeActivityModal() {
+      var modal = document.getElementById('activity-modal');
+      modal.classList.add('hidden');
+      modal.classList.remove('flex');
+    }
+    function pcmViewActivity() {
+      var devId = _pcmDevId, port = _pcmPort;
+      closePortModal();
+      openActivityModal(devId, port);
     }
 
     // ─── Automations modal ────────────────────────────────────────────

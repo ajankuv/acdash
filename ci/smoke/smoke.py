@@ -100,6 +100,15 @@ def dashboard_checks(app: str) -> None:
     st, _, _ = req("GET", f"{app}/api/automations?dev_id={DEV1}")
     check("GET /api/automations ok", st == 200, f"status={st}")
 
+    st, _, body = req("GET", f"{app}/api/activity?dev_id={DEV1}")
+    try:
+        texts = [e["text"] for e in json.loads(body).get("events", [])]
+    except ValueError:
+        texts = []
+    check("GET /api/activity decodes controller events", st == 200 and "Low water detected" in texts
+          and "Port 1 mode: On (speed 5)" in texts and any(t.startswith("Unrecognized event") for t in texts)
+          and not any("Cycle" in t for t in texts), f"status={st} texts={texts}")
+
 
 def post_json(url: str, payload: dict) -> tuple[int, dict]:
     st, _, body = req("POST", url, data=json.dumps(payload).encode(), ctype="application/json")

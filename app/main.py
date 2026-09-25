@@ -18,7 +18,7 @@ from fastapi import FastAPI, Form, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
-from app import backfill, storage
+from app import backfill, eventlog, storage
 from app.client import ACInfinityClient
 from app.collector import COLLECTOR_INTERVAL, collector_loop
 from app.debug_bundle import collect_debug_bundle
@@ -583,6 +583,44 @@ async def api_automation_create(request: Request) -> JSONResponse:
         msg = result.get("msg", "") if isinstance(result, dict) else ""
         return JSONResponse({"error": msg or "Command failed"}, status_code=400)
     return JSONResponse({"ok": True})
+
+
+_activity_cache: dict[str, dict[str, Any]] = {}
+_ACTIVITY_CACHE_TTL = 60.0
+
+
+@app.get("/api/activity")
+def api_activity(
+    dev_id: str = Query("", alias="dev_id"),
+    hours: float = Query(24.0, ge=1.0, le=168.0),
+    port: int | None = Query(None, ge=1, le=8),
+) -> JSONResponse:
+    """Controller event log (mode changes, alarms, notices, AI actions), newest first. Read-only."""
+    if not credentials_configured():
+        return JSONResponse({"error": "Unauthorized"}, status_code=401)
+    dev_id = dev_id.strip()
+    if not dev_id:
+        return JSONResponse({"error": "dev_id is required"}, status_code=400)
+    controllers, _err, _at = get_cached_controllers()
+    if controllers and dev_id not in {str(c.get("id")) for c in controllers}:
+        return JSONResponse({"error": "Controller not found on this account"}, status_code=404)
+
+    key = f"{dev_id}:{round(hours)}"
+    hit = _activity_cache.get(key)
+    if hit and time.monotonic() - hit["at"] < _ACTIVITY_CACHE_TTL:
+        result = hit["data"]
+    else:
+        email, password = _get_credentials()
+        if not email or not password:
+            return JSONResponse({"error": "Unauthorized"}, status_code=401)
+        result = eventlog.fetch_events(get_client(email, password), dev_id, now=int(time.time()), hours=hours)
+        if not result.get("error"):
+            _activity_cache[key] = {"at": time.monotonic(), "data": result}
+    events = result["events"]
+    if port is not None:
+        events = [e for e in events if e.get("port") == port]
+    return JSONResponse({**result, "events": events, "port": port},
+                        headers={"Cache-Control": "no-store"})
 
 
 @app.get("/api/history-chart")

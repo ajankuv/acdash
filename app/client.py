@@ -20,6 +20,7 @@ DEVICES_ENDPOINT = f"{API_BASE}/user/devInfoListAll"
 DEV_MODE_SETTING_ENDPOINT = f"{API_BASE}/dev/getdevModeSettingList"
 DEV_SETTING_ENDPOINT = f"{API_BASE}/dev/getDevSetting"
 HISTORY_ENDPOINT = f"{API_BASE}/log/dataPage"
+EVENT_LOG_ENDPOINT = f"{API_BASE}/log/logdataByAll"
 ADD_DEV_MODE_ENDPOINT = f"{API_BASE}/dev/addDevMode"
 AUTOMATIONS_ENDPOINT = f"{API_BASE}/version=2.0/dev/getGroups"
 AUTOMATION_TOGGLE_ENDPOINT = f"{API_BASE}/version=2.0/dev/updateGroupsIsOn"
@@ -552,6 +553,36 @@ class ACInfinityClient:
             return None
 
         return None
+
+    def event_log_page(
+        self, dev_id: str, time_newer: int, time_older: int, *, cursor: int | str = 0, page_size: int = 200
+    ) -> dict[str, Any] | None:
+        """POST log/logdataByAll — the app's event log ("Logs" tab), newest first.
+
+        Query params like the app (misterboe docs/api/history.md): paginate by passing the last
+        row's ``id`` as ``id``. Returns ``data`` (``rows``, ``total``) or None. Read-only.
+        """
+        if not self._ensure_token():
+            return None
+        self._space_log_calls()
+        parsed = self._request(
+            EVENT_LOG_ENDPOINT,
+            params={
+                "appId": self.token,
+                "devId": dev_id,
+                "id": cursor,
+                "time": time_newer,
+                "endTime": time_older,
+                "pageSize": page_size,
+                "orderDirection": 1,
+            },
+        )
+        if not parsed or parsed.get("code") != 200:
+            if parsed and parsed.get("code") == RATE_LIMIT_CODE:
+                self.last_request_error = "AC Infinity is rate limiting — try again shortly"
+            return None
+        data = parsed.get("data")
+        return data if isinstance(data, dict) else None
 
 
 SIGN_APP_VERSION = "2.0.8"

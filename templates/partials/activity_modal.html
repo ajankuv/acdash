@@ -1,0 +1,33 @@
+{# Activity modal — the controller's own event log (mode changes, alarms, notices, AI actions). Read-only. #}
+<div id="activity-modal"
+     class="fixed inset-0 z-50 hidden items-center justify-center bg-black/75 backdrop-blur-sm"
+     onclick="if(event.target===this)closeActivityModal()">
+  <div class="flex max-h-[85vh] w-[22rem] max-w-[calc(100vw-2rem)] flex-col rounded-2xl border border-zinc-700 bg-zinc-900 p-5 shadow-2xl">
+
+    <div class="mb-3 flex items-start justify-between border-b border-zinc-800 pb-3">
+      <div>
+        <h3 class="text-base font-semibold text-zinc-100">Activity</h3>
+        <p id="act-sub" class="mt-0.5 text-xs text-zinc-500">Last 24 hours</p>
+      </div>
+      <button onclick="closeActivityModal()" class="ml-3 text-zinc-600 hover:text-zinc-400" aria-label="Close">✕</button>
+    </div>
+
+    <div id="act-filter" class="mb-2 hidden">
+      <button onclick="openActivityModal(_actDevId, null)"
+              class="rounded-full border border-zinc-700 px-2.5 py-0.5 text-[11px] text-zinc-400 hover:border-zinc-500">
+        Showing one port — show all ✕
+      </button>
+    </div>
+
+    <div id="act-error"
+         class="mb-2 hidden rounded-lg bg-red-900/40 px-3 py-2 text-xs text-red-300 ring-1 ring-red-800/60"></div>
+
+    <ol id="act-list" class="-mx-1 flex-1 space-y-1 overflow-y-auto px-1">
+      <li class="text-center text-xs text-zinc-600">Loading…</li>
+    </ol>
+
+    <p class="mt-3 border-t border-zinc-800 pt-2 text-[10px] text-zinc-600">
+      From the controller's log in the AC Infinity cloud (same as the app's Logs tab). Updates about once a minute.
+    </p>
+  </div>
+</div>

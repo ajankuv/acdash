@@ -305,16 +305,33 @@ async def data_page(request: Request) -> JSONResponse:
 
 @app.post("/api/log/logdataByAll")
 async def log_data_by_all(request: Request) -> JSONResponse:
+    """Event log in the real NetLog shape: logTime seconds, id cursor, newest first."""
     if (p := _token_problem(request)) is not None:
         return p
+    q, f = await _params(request)
+    fields = {**q, **f}
     now = int(time.time())
-    rows = [
-        {"id": 3, "createTime": now - 60, "logType": 4, "businessType": 0, "portSelection": 1, "currentMode": 2},
-        {"id": 2, "createTime": now - 600, "logType": 2, "businessType": 1, "portSelection": 0, "alarmHighTemp": 1},
-        {"id": 1, "createTime": now - 900, "logType": 3, "businessType": 1, "portSelection": 2,
-         "mlVariationTrend": 2, "pauseReason": 4, "currentStatus": 1},
+    base = [
+        {"logType": 4, "businessType": 0, "portSelection": 1, "currentMode": 2, "fanSpeedOn": 5, "ago": 60},
+        {"logType": 2, "businessType": 1, "portSelection": 0, "isActivateAlarmHightemp": 1, "ago": 600},
+        {"logType": 3, "businessType": 1, "portSelection": 2, "mlVariationTrend": 2, "pauseReason": 4,
+         "mlVariation": 3, "currentStatus": 1, "ago": 900},
+        {"logType": 5, "businessType": 2, "portSelection": 0, "ago": 1800},
+        {"logType": 9, "businessType": 7, "portSelection": 0, "ago": 3600},
+        {"logType": 4, "businessType": 0, "portSelection": 3, "currentMode": 6, "cycleOn": 15, "cycleOff": 45,
+         "ago": 200_000},  # outside a 24 h window
     ]
-    return _ok({"rows": rows, "total": len(rows), "validFrom": now - 86400})
+    rows = []
+    for i, r in enumerate(base):
+        t = now - r.pop("ago")
+        rows.append({"id": t * 10 + i, "logId": str(1000 + i), "logFormat": 4, "logTime": t, **r})
+    rows.sort(key=lambda r: r["id"], reverse=True)
+    cursor = int(fields.get("id") or 0)
+    if cursor:
+        rows = [r for r in rows if r["id"] < cursor]
+    size = int(fields.get("pageSize") or 200)
+    page = rows[:size]
+    return _ok({"rows": page, "total": len(page), "validFrom": now - 86400 * 90})
 
 
 @app.post("/api/version=2.0/dev/getGroups")
