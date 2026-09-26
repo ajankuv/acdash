@@ -154,7 +154,7 @@ GitHub Actions:
 - **`ci.yml`** — every PR and branch push: unit tests → build image → hygiene → smoke test (both write formats) → upgrade/rollback test against the published `:latest` → Trivy scan (report only). Never pushes.
 - **`release-docker.yml`** — `main` and `v*` tags: runs the same CI first, only then pushes to GHCR, then pulls the published `:<sha>` image and smoke-tests it again.
 - To make critical CVEs block releases, set repository variable **`TRIVY_FAIL_ON_CRITICAL=true`**.
-- Dependabot opens weekly update PRs (pip, Actions, Docker base images); they go through the same CI.
+- Dependabot opens weekly update PRs (pip, Actions, Docker base images); they go through the same CI. Merging one runs the tests on `main` but does **not** publish an image — the update ships with your next regular push.
 
 ---
 

@@ -1,6 +1,7 @@
 # Build Docker image and push to GitHub Container Registry (GHCR) — only after tests pass.
 #
 # - Push to `main`  → `ghcr.io/<owner>/<repo>:latest` (+ short SHA tag)
+#   (except Dependabot merge commits: tested only, published with the next regular push)
 # - Push tag `v*`   → `ghcr.io/<owner>/<repo>:<semver>` and a GitHub Release
 #
 # Order: CI (unit + image smoke + upgrade tests, see ci.yml) → push ONLY :<sha> → pull and
@@ -30,6 +31,11 @@ jobs:
 
   docker:
     needs: ci
+    # Dependabot merges are tested (ci above) but not published: they ship with the next
+    # regular push to main. Version tags (v*) always publish.
+    if: >-
+      startsWith(github.ref, 'refs/tags/v') ||
+      github.event.head_commit.author.name != 'dependabot[bot]'
     runs-on: ubuntu-latest
     outputs:
       sha_tag: ${{ steps.sha.outputs.tag }}

@@ -1,4 +1,5 @@
 # Weekly dependency update PRs. Each PR runs the full CI (unit + image smoke test).
+# Merging one does NOT publish an image — it ships with the next regular push to main.
 version: 2
 updates:
   - package-ecosystem: pip
