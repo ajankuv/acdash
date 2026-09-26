@@ -21,6 +21,7 @@ services:
       - CACHE_SECONDS=2
       - WRITE_VERIFY_SECONDS=15
       - BACKFILL_DAYS=1
+      - STATUS_STALE_SECONDS=15
       - ACINFINITY_WRITE_FORMAT=${ACINFINITY_WRITE_FORMAT:-query}
     volumes:
       - acdash_data:/app/data

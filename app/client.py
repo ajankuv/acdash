@@ -13,7 +13,7 @@ import httpx
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_API_BASE = "http://www.acinfinityserver.com/api"
+DEFAULT_API_BASE = "https://www.acinfinityserver.com/api"
 # Override for CI (points the container at a fake AC Infinity server). Unset → real cloud.
 API_BASE = (os.environ.get("ACINFINITY_API_BASE") or "").strip().rstrip("/") or DEFAULT_API_BASE
 LOGIN_ENDPOINT = f"{API_BASE}/user/appUserLogin"
@@ -426,6 +426,9 @@ class ACInfinityClient:
         *,
         transport: str = "query",
         sign: bool = False,
+        app_headers: bool = False,
+        dev_type: int | None = None,
+        api_base: str | None = None,
         _retry: bool = True,
     ) -> dict[str, Any] | None:
         """POST dev/addDevMode — write port mode settings.
@@ -445,15 +448,14 @@ class ACInfinityClient:
             h = {"token": self.token or ""}
             if sign:
                 h.update(sign_headers(self.token or "", self.secret_id or "", self.request_app or ""))
+            if app_headers:  # what the Android app sends for standard controllers (getMinVersionHeader)
+                h.update({"devType": str(dev_type if dev_type is not None else 11), "minversion": ""})
             return h
 
+        url = f"{api_base.rstrip('/')}/dev/addDevMode" if api_base else ADD_DEV_MODE_ENDPOINT
         if transport == "form":
-            return self._request(
-                ADD_DEV_MODE_ENDPOINT, data=fields, headers=extra, header_fn=headers, retry_on_expired=False
-            )
-        return self._request(
-            ADD_DEV_MODE_ENDPOINT, params=fields, headers=extra, header_fn=headers, retry_on_expired=False
-        )
+            return self._request(url, data=fields, headers=extra, header_fn=headers, retry_on_expired=False)
+        return self._request(url, params=fields, headers=extra, header_fn=headers, retry_on_expired=False)
 
     def get_automations_raw(self, dev_id: str | int) -> list[dict[str, Any]]:
         """POST version=2.0/dev/getGroups — raw named automation program list."""

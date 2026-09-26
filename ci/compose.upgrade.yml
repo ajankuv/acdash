@@ -24,6 +24,9 @@ services:
     environment:
       - PORT=8080
       - ENV_FILE_PATH=/app/data/.env
+      # New images default to https; older ones ignore this and use plain http. Either way the
+      # sealed network routes www.acinfinityserver.com to the fake API.
+      - ACINFINITY_API_BASE=http://www.acinfinityserver.com/api
       - COLLECTOR_INTERVAL_SECONDS=5
       - CACHE_SECONDS=2
       - BACKFILL_DAYS=1

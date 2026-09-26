@@ -4,6 +4,59 @@
   {% include "partials/automations_modal.html" %}
   {% include "partials/activity_modal.html" %}
 {% endblock %}
+{% block header_right %}
+  {# Data freshness pill — polls /status. Hidden until the first answer so it never flashes wrong. #}
+  <span id="acdash-status" role="status" aria-live="polite"
+        class="hidden items-center gap-1.5 whitespace-nowrap rounded-full px-2.5 py-1 text-[11px] font-medium ring-1">
+    <span id="acdash-status-dot" class="h-1.5 w-1.5 shrink-0 rounded-full"></span>
+    <span id="acdash-status-text"></span><span id="acdash-status-detail" class="hidden sm:inline"></span>
+  </span>
+  <script>
+    (function () {
+      var el = document.getElementById("acdash-status");
+      var dot = document.getElementById("acdash-status-dot");
+      var txt = document.getElementById("acdash-status-text");
+      var detail = document.getElementById("acdash-status-detail");
+      var styles = {
+        ok: ["bg-emerald-500/10 text-emerald-300 ring-emerald-500/30", "bg-emerald-400"],
+        starting: ["bg-zinc-800/60 text-zinc-400 ring-zinc-700", "bg-zinc-500"],
+        stale: ["bg-amber-500/10 text-amber-300 ring-amber-500/40", "bg-amber-400"],
+        unknown: ["bg-zinc-800/60 text-zinc-500 ring-zinc-700", "bg-zinc-600"]
+      };
+      function ago(sec) {
+        if (sec == null) return "";
+        if (sec < 90) return Math.round(sec) + "s ago";
+        if (sec < 5400) return Math.round(sec / 60) + " min ago";
+        return Math.round(sec / 3600) + " h ago";
+      }
+      function show(state, label, tip, extra) {
+        var st = styles[state] || styles.unknown;
+        el.className = "inline-flex items-center gap-1.5 whitespace-nowrap rounded-full px-2.5 py-1 text-[11px] font-medium ring-1 " + st[0];
+        dot.className = "h-1.5 w-1.5 shrink-0 rounded-full " + st[1];
+        txt.textContent = label;
+        detail.textContent = extra ? " · " + extra : "";   // extra text only on wider screens
+        el.title = tip || label;
+      }
+      function url() {
+        var cu = window.__ACDASH_CLIENT_URLS__ || {};
+        return cu.status || new URL("status", window.location.href.replace(/[#?].*$/, "").replace(/\/?$/, "/")).href;
+      }
+      function poll() {
+        fetch(url(), { credentials: "same-origin", cache: "no-store" })
+          .then(function (r) { return r.json(); })
+          .then(function (s) {
+            if (s.state === "ok") show("ok", "Live", "Data updated " + ago(s.seconds_since_success));
+            else if (s.state === "starting") show("starting", "Connecting…", "Waiting for the first update from AC Infinity");
+            else show("stale", "Stale", "No fresh data from AC Infinity" + (s.last_error ? " — " + s.last_error : ""),
+                      s.seconds_since_success == null ? "no data yet" : ago(s.seconds_since_success));
+          })
+          .catch(function () { show("unknown", "Status ?", "Could not reach AC Dash"); });
+      }
+      poll();
+      setInterval(poll, 30000);
+    })();
+  </script>
+{% endblock %}
 {% block content %}
   <div id="dashboard-error">
     {% if error %}

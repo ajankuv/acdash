@@ -14,14 +14,19 @@ def _reload(monkeypatch, value):
 
 def test_api_base_default_when_unset(monkeypatch):
     mod = _reload(monkeypatch, None)
-    assert mod.API_BASE == "http://www.acinfinityserver.com/api"
+    assert mod.API_BASE == "https://www.acinfinityserver.com/api"
+    assert mod.LOGIN_ENDPOINT == "https://www.acinfinityserver.com/api/user/appUserLogin"
+    assert mod.ADD_DEV_MODE_ENDPOINT == "https://www.acinfinityserver.com/api/dev/addDevMode"
+
+
+def test_api_base_http_override_kept(monkeypatch):
+    mod = _reload(monkeypatch, "http://www.acinfinityserver.com/api")
     assert mod.LOGIN_ENDPOINT == "http://www.acinfinityserver.com/api/user/appUserLogin"
-    assert mod.ADD_DEV_MODE_ENDPOINT == "http://www.acinfinityserver.com/api/dev/addDevMode"
 
 
 def test_api_base_default_when_blank(monkeypatch):
     mod = _reload(monkeypatch, "   ")
-    assert mod.API_BASE == "http://www.acinfinityserver.com/api"
+    assert mod.API_BASE == "https://www.acinfinityserver.com/api"
 
 
 def test_api_base_override_applies_to_all_endpoints(monkeypatch):

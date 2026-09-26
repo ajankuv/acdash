@@ -7,6 +7,7 @@ import math
 import os
 import threading
 import time
+from dataclasses import asdict, dataclass
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -91,6 +92,45 @@ FORM_SENTINELS: dict[str, Any] = {
 
 # Overlay keys that are acdash bookkeeping, not API fields.
 _NON_API_OVERLAY_KEYS = frozenset({"port"})
+
+
+# °F fields the Android app clamps to >= 32 before every write (jadx yr.resetTemperatureValues).
+F_FIELDS_MIN_32 = ("devHtf", "targetTempF", "devLtf", "waterTempTargetValueF", "waterTempHighValueF", "waterTempLowValueF")
+
+
+@dataclass(frozen=True)
+class WriteVariant:
+    """Opt-in write knobs for tools/control_experiment.py. The dashboard never passes one, so
+    its requests stay byte-identical; each field left at its default changes nothing."""
+
+    name: str = "default"
+    only_update_speed: int | None = None   # app sends 1 from the power slider, 0 on mode saves
+    clamp_f: bool = False                  # app raises °F fields < 32 to 32
+    force_mode_type: int | None = None     # ober37 forces modeType=2 when on-speed > 0
+    fmt: str | None = None                 # "query" | "form" override
+    sign: bool | None = None               # app 2.0.8 request signing
+    app_headers: bool = False              # app sends devType + empty minversion on devType 11
+    api_base: str | None = None            # e.g. plain-http base for the write only
+
+    def knobs(self) -> dict[str, Any]:
+        return {k: v for k, v in asdict(self).items() if k != "name" and v not in (None, False)}
+
+
+def apply_variant(payload: dict[str, Any], variant: "WriteVariant | None") -> dict[str, Any]:
+    """Apply a WriteVariant's payload knobs. ``None`` returns the payload unchanged."""
+    if variant is None:
+        return payload
+    out = dict(payload)
+    if variant.only_update_speed is not None:
+        out["onlyUpdateSpeed"] = int(variant.only_update_speed)
+    if variant.clamp_f:
+        for key in F_FIELDS_MIN_32:
+            v = out.get(key)
+            if isinstance(v, int) and not isinstance(v, bool) and v < 32:
+                out[key] = 32
+    if variant.force_mode_type is not None:
+        out["modeType"] = int(variant.force_mode_type)
+    return out
 
 
 def get_write_format() -> str:
@@ -561,6 +601,7 @@ def write_port_control(
     *,
     restore_record: dict[str, Any] | None = None,
     live_port: dict[str, Any] | None = None,
+    variant: WriteVariant | None = None,
 ) -> dict[str, Any]:
     """Apply port control changes (or restore a snapshot). Read-before-write, spaced, snapshotted.
 
@@ -601,7 +642,8 @@ def write_port_control(
             current = normalize_port_settings([raw_record])
             overlay = build_mode_payload(dev_id, port, current, changes)
 
-        fmt = get_write_format()
+        fmt = (variant.fmt if variant is not None and variant.fmt else None) or get_write_format()
+        sign = variant.sign if variant is not None and variant.sign is not None else signing_enabled()
         expected = expected_state({**raw_record, **overlay})
         if is_noop(raw_record, overlay) and live_port is not None:
             from app.verify import port_matches
@@ -610,9 +652,14 @@ def write_port_control(
                 return {"status": "no_change", "format": fmt, "expected": expected}
 
         dev_type = getattr(client, "_dev_types", {}).get(str(dev_id))
-        payload = build_write_payload(raw_record, overlay, fmt, dev_type=dev_type)
+        payload = apply_variant(build_write_payload(raw_record, overlay, fmt, dev_type=dev_type), variant)
         storage.save_settings_snapshot(dev_id, port, raw_record, "restore" if restore_record is not None else "write")
-        result = client.set_port_mode(dev_id, port, payload, transport=fmt, sign=signing_enabled())
+        if variant is None:
+            result = client.set_port_mode(dev_id, port, payload, transport=fmt, sign=sign)
+        else:
+            result = client.set_port_mode(dev_id, port, payload, transport=fmt, sign=sign,
+                                          app_headers=variant.app_headers, dev_type=dev_type,
+                                          api_base=variant.api_base)
 
     if result is None:
         raise ControlError("Could not reach AC Infinity — check your connection")

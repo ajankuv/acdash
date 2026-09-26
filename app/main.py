@@ -19,6 +19,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, Red
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
 from app import backfill, eventlog, storage
+from app import status as service_status
 from app.client import ACInfinityClient
 from app.collector import COLLECTOR_INTERVAL, collector_loop
 from app.debug_bundle import collect_debug_bundle
@@ -32,7 +33,8 @@ from app.control import (
 )
 from app.history import fetch_history_for_chart, thin_points
 from app.normalize import normalize_devices
-from app.session import get_client, reset_client
+from app.security import RequestSafetyMiddleware, read_json_body
+from app.session import get_client, reset_client, session_active
 from app import verify
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
@@ -105,6 +107,7 @@ async def lifespan(_app: FastAPI):  # noqa: RUF029
 
 
 app = FastAPI(title="AC Dash", version="0.1.0", lifespan=lifespan)
+app.add_middleware(RequestSafetyMiddleware)
 
 
 def _client_dashboard_urls(request: Request) -> dict[str, Any]:
@@ -121,6 +124,7 @@ def _client_dashboard_urls(request: Request) -> dict[str, Any]:
         ],
         "debug_dump": urljoin(base, "api/debug/ac-infinity-dump"),
         "setup": urljoin(base, "setup"),
+        "status": urljoin(base, "status"),
     }
 
 
@@ -207,6 +211,10 @@ def get_cached_controllers() -> tuple[list[dict], str | None, float]:
         return _cache["controllers"], _cache["error"], last  # type: ignore[return-value]
 
     controllers, err = _fetch_controllers()
+    if controllers and not err:
+        service_status.record_success()
+    else:
+        service_status.record_error(err or "No controllers returned")
     _cache["controllers"] = controllers
     _cache["error"] = err
     _cache["at"] = now
@@ -216,6 +224,15 @@ def get_cached_controllers() -> tuple[list[dict], str | None, float]:
 @app.get("/health")
 def health() -> PlainTextResponse:
     return PlainTextResponse("OK", status_code=200)
+
+
+@app.get("/status")
+def status() -> JSONResponse:
+    """Data freshness for uptime monitors: 200 ok/starting, 503 stale. No secrets."""
+    code, body = service_status.snapshot(
+        COLLECTOR_INTERVAL, session_active=session_active(), backfill=backfill.status
+    )
+    return JSONResponse(body, status_code=code, headers={"Cache-Control": "no-store"})
 
 
 @app.get("/setup", response_class=HTMLResponse, response_model=None)
@@ -337,10 +354,9 @@ async def set_controller_stage_endpoint(request: Request) -> JSONResponse:
     """Save a grow stage label for a controller."""
     if not credentials_configured():
         return JSONResponse({"error": "Unauthorized"}, status_code=401)
-    try:
-        body = await request.json()
-    except Exception:
-        return JSONResponse({"error": "Invalid JSON"}, status_code=400)
+    body, err = await read_json_body(request)
+    if err is not None:
+        return err
     dev_id = (body.get("dev_id") or "").strip()
     stage = (body.get("stage") or "").strip()
     if not dev_id or not stage:
@@ -377,10 +393,9 @@ async def api_port_control(request: Request) -> JSONResponse:
     """Apply port mode/speed changes. Body: {dev_id, port, mode, ...mode fields}."""
     if not credentials_configured():
         return JSONResponse({"error": "Unauthorized"}, status_code=401)
-    try:
-        body = await request.json()
-    except Exception:
-        return JSONResponse({"error": "Invalid JSON"}, status_code=400)
+    body, err = await read_json_body(request)
+    if err is not None:
+        return err
 
     dev_id = str(body.get("dev_id") or "").strip()
     port_raw = body.get("port")
@@ -459,10 +474,9 @@ async def api_port_restore(request: Request) -> JSONResponse:
     """Write a port's most recent pre-write snapshot back (same write + verify path)."""
     if not credentials_configured():
         return JSONResponse({"error": "Unauthorized"}, status_code=401)
-    try:
-        body = await request.json()
-    except Exception:
-        return JSONResponse({"error": "Invalid JSON"}, status_code=400)
+    body, err = await read_json_body(request)
+    if err is not None:
+        return err
     dev_id = str(body.get("dev_id") or "").strip()
     try:
         port = int(body.get("port"))
@@ -503,10 +517,9 @@ async def api_automation_toggle(request: Request) -> JSONResponse:
     """Enable or disable a named automation program."""
     if not credentials_configured():
         return JSONResponse({"error": "Unauthorized"}, status_code=401)
-    try:
-        body = await request.json()
-    except Exception:
-        return JSONResponse({"error": "Invalid JSON"}, status_code=400)
+    body, err = await read_json_body(request)
+    if err is not None:
+        return err
     dev_id = str(body.get("dev_id") or "").strip()
     adv_id = str(body.get("adv_id") or "").strip()
     is_on = bool(body.get("is_on"))
@@ -531,10 +544,9 @@ async def api_automation_delete(request: Request) -> JSONResponse:
     """Delete a named automation program."""
     if not credentials_configured():
         return JSONResponse({"error": "Unauthorized"}, status_code=401)
-    try:
-        body = await request.json()
-    except Exception:
-        return JSONResponse({"error": "Invalid JSON"}, status_code=400)
+    body, err = await read_json_body(request)
+    if err is not None:
+        return err
     dev_id = str(body.get("dev_id") or "").strip()
     adv_id = str(body.get("adv_id") or "").strip()
     if not dev_id or not adv_id:
@@ -558,10 +570,9 @@ async def api_automation_create(request: Request) -> JSONResponse:
     """Create a new named automation program."""
     if not credentials_configured():
         return JSONResponse({"error": "Unauthorized"}, status_code=401)
-    try:
-        body = await request.json()
-    except Exception:
-        return JSONResponse({"error": "Invalid JSON"}, status_code=400)
+    body, err = await read_json_body(request)
+    if err is not None:
+        return err
     dev_id = str(body.get("dev_id") or "").strip()
     name = str(body.get("name") or "").strip()[:64]
     ports: list[int] = [int(p) for p in (body.get("ports") or []) if str(p).isdigit() and 1 <= int(p) <= 8]

@@ -120,7 +120,11 @@ ACINFINITY_PASSWORD=yourpassword
 | `ACINFINITY_WRITE_FORMAT` | `query` | How port changes are sent: `query` (original) or `form` (form body, app field set — what other working clients use). Try `form` if changes show "controller did not apply" |
 | `WRITE_VERIFY_SECONDS` | `90` | How long to watch the controller's live state after a change before reporting "did not apply" |
 | `ACINFINITY_SIGN_WRITES` | — | Set to `1` to add the newer app's request-signing headers to writes (experimental) |
-| `ACINFINITY_API_BASE` | AC Infinity cloud | Override the API base URL (used by CI to point at a fake server — leave unset) |
+| `ACDASH_TRUSTED_ORIGINS` | — | Extra origins allowed to send changes, comma-separated (e.g. `https://grow.example.com` behind a reverse proxy) |
+| `ACDASH_TRUST_PROXY_HEADERS` | — | Set to `1` to treat `X-Forwarded-Host` as this dashboard's own host |
+| `ACDASH_FRAME_OPTIONS` | — | `DENY` or `SAMEORIGIN` to block embedding in frames (off by default so launchers can embed it) |
+| `STATUS_STALE_SECONDS` | 3 × collector interval | How old data may be before `/status` reports `stale` (503) |
+| `ACINFINITY_API_BASE` | `https://www.acinfinityserver.com/api` | Override the API base URL (CI points it at a fake server; leave unset) |
 
 ---
 
@@ -130,7 +134,9 @@ AC Dash needs your AC Infinity cloud email and password to call their API on you
 
 - Credentials are written to **`/app/data/.env`** inside the container after the setup wizard. Mount a volume on `/app/data` so they survive container recreates.
 - **Nothing is sent to this project's author** or any third party. All traffic goes directly to `acinfinityserver.com` — the same server the mobile app talks to.
-- The AC Infinity API uses plain HTTP (not HTTPS) — this is on their end, not ours. Run AC Dash on a trusted network.
+- AC Dash talks to the AC Infinity cloud over **HTTPS** (certificate verified). Set `ACINFINITY_API_BASE=http://www.acinfinityserver.com/api` only if you need the old plain-HTTP behavior.
+- **Changes only from the dashboard itself:** requests that change anything (ports, automations, stages, setup) are refused when a browser marks them as coming from another site, so other web pages can't drive your equipment. Scripts using `curl` with `Content-Type: application/json` still work.
+- **Monitoring:** `/health` only says the web server is up. `/status` reports whether data is fresh — it returns 503 when AC Dash hasn't fetched data for a while (logged out, cloud down). Point an uptime monitor at `/status`.
 - **Sign-in problems:** passwords longer than 25 characters are cut to 25 by the AC Infinity app, so AC Dash tries that automatically if the full password is refused. After a refused sign-in AC Dash waits 5 minutes before trying again (so a wrong password isn't hammered every refresh) — fix it in the setup wizard or restart the container to retry immediately.
 - AC Dash keeps **one** AC Infinity session and re-uses it; it only signs in again when the API says the session expired.
 - Don't paste the debug JSON dump (`/api/debug/ac-infinity-dump`) into public issues — it contains device IDs, Wi-Fi names, and account fields.
@@ -148,6 +154,17 @@ ci/smoke/hygiene.sh acdash:ci            # image must not contain tests/, RND/, 
 ci/smoke/run.sh                          # real container vs fake AC Infinity API (ci/fake_acinfinity)
 ci/smoke/upgrade.sh <old-image> acdash:ci # old → new → old on one data volume (sealed network, no real cloud)
 ```
+
+Control experiment (maintainers, real hardware — one allowlisted controller only):
+
+```bash
+export ACDASH_EXPERIMENT_DEV_ID=<device id> ACDASH_EXPERIMENT_DEV_NAME=<part of its name>
+python tools/control_experiment.py                  # list that controller's ports
+python tools/control_experiment.py --port 2         # dry run: show every write variant
+python tools/control_experiment.py --port 2 --live  # change only the power level per variant, restore after each
+```
+
+It refuses any other controller, empty/shared/automation ports and ports not in On mode, and writes its report to `RND/experiments/` (gitignored).
 
 GitHub Actions:
 

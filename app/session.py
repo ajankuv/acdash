@@ -52,3 +52,9 @@ def reset_client() -> None:
     with _lock:
         old, _client, _key = _client, None, None
     _retire(old)
+
+
+def session_active() -> bool:
+    """True when the shared client currently holds a session token (never exposes the token)."""
+    with _lock:
+        return bool(_client is not None and _client.token)

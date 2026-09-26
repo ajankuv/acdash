@@ -29,7 +29,7 @@ Findings come from **layered evidence**. Stronger claims cite **multiple** of th
 
 ### 1.1 Live HTTP traffic and JSON
 
-- We call the same **production-shaped** endpoints the Android app uses (default base `http://www.acinfinityserver.com/api/`).
+- We call the same **production-shaped** endpoints the Android app uses (acdash default `https://www.acinfinityserver.com/api/`; the Android app itself uses http).
 - Responses use a repeated envelope (see §3). We record **field names**, **numeric scales**, and **error codes** from real bodies.
 - **Caveat:** Your account, firmware, and SKU may return fields we have not seen; treat absent keys as normal.
 
@@ -82,7 +82,7 @@ That produced the **observed** `loadType` / `portResistance` table in §8. Those
 
 ## 2. Base URL and environments
 
-- **Default production API root:** `http://www.acinfinityserver.com/api/` (HTTP cleartext is intentional in shipping `network_security_config`; see `td.java`).
+- **Production API root:** the Android app uses `http://www.acinfinityserver.com/api/` (cleartext allowed in its `network_security_config`; see `td.java`). The same host also serves HTTPS, which acdash uses by default.
 - **UAT** (accounts **not** shared with prod): `https://uat-www.acinfinityserver.com/api/` — if login works in-app but not in scripts, **base URL mismatch** is a common cause (see internal `RND/USABLE_API.md` if you maintain it).
 - All **relative** paths below are under that **`/api/`** root unless noted as **absolute** from the host (e.g. `/api/ipc/...`).
 

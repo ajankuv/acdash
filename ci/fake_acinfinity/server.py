@@ -1,6 +1,6 @@
 """Fake AC Infinity cloud API for CI smoke tests.
 
-Implements just enough of http://www.acinfinityserver.com/api for acdash to log in,
+Implements just enough of the AC Infinity cloud API (www.acinfinityserver.com/api) for acdash to log in,
 render the dashboard, read port settings, write port modes, and load history.
 All data is synthetic (no real account, device IDs, or Wi-Fi names).
 
@@ -149,6 +149,10 @@ class State:
         self.expire_next = 0        # next N token requests answer code 10003
         self.rate_limit_next = 0    # next N log requests answer code 999998
         self.write_code = 200       # force addDevMode result code
+        # Mimic HA #166: a write that doesn't change the mode is stored but NOT applied to the
+        # device unless every condition here matches (field name → value, or "header:<name>").
+        # None = apply everything (default).
+        self.speed_only_needs: dict[str, str] | None = None
 
     def port(self, dev_id: str, n: int) -> dict[str, Any] | None:
         for d in self.devices:
@@ -259,10 +263,18 @@ async def add_dev_mode(request: Request) -> JSONResponse:
     if S.write_code != 200:
         return JSONResponse({"code": S.write_code, "msg": "Forced failure", "data": None})
     rec = S.modes[(dev_id, port_n)]
+    mode_changed = int(fields.get("atType", rec.get("atType")) or 0) != int(port["curMode"])
     for k, v in fields.items():
         if k in rec and k != "devSetting":
             rec[k] = _coerce(v)
-    if not S.ignore_writes:
+    applies = True
+    if S.speed_only_needs and not mode_changed:
+        hdrs = {k.lower(): v for k, v in request.headers.items()}
+        applies = all(
+            (hdrs.get(k[7:].lower()) == v) if k.startswith("header:") else (str(fields.get(k)) == v)
+            for k, v in S.speed_only_needs.items()
+        )
+    if not S.ignore_writes and applies:
         at = int(rec.get("atType", port["curMode"]))
         port["curMode"] = at
         if at == 1:
@@ -360,7 +372,7 @@ async def reset() -> JSONResponse:
 @app.post("/__behavior")
 async def behavior(request: Request) -> JSONResponse:
     body = json.loads(await request.body() or b"{}")
-    for key in ("ignore_writes", "expire_next", "rate_limit_next", "write_code"):
+    for key in ("ignore_writes", "expire_next", "rate_limit_next", "write_code", "speed_only_needs"):
         if key in body:
             setattr(S, key, body[key])
     return JSONResponse({"ok": True})

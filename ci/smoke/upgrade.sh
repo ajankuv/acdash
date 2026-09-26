@@ -61,9 +61,13 @@ echo "== 2. upgrade to new image: $NEW"
 "${C[@]}" rm -f acdash >/dev/null
 up "$NEW"
 out=$(http GET /); case "$out" in *"CI Flower Tent"*) echo "PASS  saved credentials survive upgrade";; *) fail "new dashboard after upgrade: ${out:0:200}";; esac
-LOCAL_AFTER=$(db "c.execute(\"select count(*) from readings where source='local'\").fetchone()[0]")
-[ "$LOCAL_AFTER" -ge "$OLD_ROWS" ] || fail "rows lost on upgrade ($LOCAL_AFTER < $OLD_ROWS)"
-echo "PASS  old readings kept and marked local ($LOCAL_AFTER >= $OLD_ROWS)"
+# Total rows must not shrink. (The previous image may itself backfill cloud rows, so only
+# rows written before any source column existed are guaranteed to be marked 'local'.)
+ALL_AFTER=$(db "c.execute('select count(*) from readings').fetchone()[0]")
+UNSOURCED=$(db "c.execute(\"select count(*) from readings where source is null or source not in ('local','cloud')\").fetchone()[0]")
+[ "$ALL_AFTER" -ge "$OLD_ROWS" ] || fail "rows lost on upgrade ($ALL_AFTER < $OLD_ROWS)"
+[ "$UNSOURCED" = "0" ] || fail "$UNSOURCED rows without a valid source after upgrade"
+echo "PASS  old readings kept ($ALL_AFTER >= $OLD_ROWS), all rows sourced"
 SNAP=$(db "c.execute(\"select count(*) from sqlite_master where name='settings_snapshots'\").fetchone()[0]")
 [ "$SNAP" = "1" ] || fail "settings_snapshots table missing"
 echo "PASS  migrations applied"

@@ -164,6 +164,37 @@ def write_verification_checks(app: str, fake: str) -> None:
     check("empty port (portResistance 65535) → clear error", st == 400 and "Nothing is plugged" in out.get("error", ""), str(out))
 
 
+def request_safety_checks(app: str, fake: str) -> None:
+    st, hdr, body = req("GET", f"{app}/status")
+    check("GET /status ok after data loads", st == 200 and json.loads(body).get("state") == "ok", f"{st} {body[:200]}")
+    lower = {k.lower(): v for k, v in hdr.items()}
+    check("security headers present", lower.get("x-content-type-options") == "nosniff"
+          and lower.get("referrer-policy") == "same-origin", str(lower)[:200])
+    before = len(json.loads(req("GET", f"{fake}/__writes")[2]))
+    r = urllib.request.Request(f"{app}/api/port-control", data=b'{"dev_id":"%s","port":1,"mode":"off"}' % DEV1.encode(),
+                               method="POST", headers={"Content-Type": "text/plain", "Origin": "http://evil.example"})
+    try:
+        code = _opener.open(r, timeout=10).status
+    except urllib.error.HTTPError as e:
+        code = e.code
+    after = len(json.loads(req("GET", f"{fake}/__writes")[2]))
+    check("cross-site POST refused, nothing written", code == 403 and after == before, f"status={code} writes {before}->{after}")
+
+
+def phase_stale(app: str, fake: str) -> None:
+    """Run after the fake cloud is stopped: /status must go stale while /health stays up."""
+    deadline = time.time() + 60
+    st, body = 0, ""
+    while time.time() < deadline:
+        st, _, body = req("GET", f"{app}/status")
+        if st == 503:
+            break
+        time.sleep(3)
+    check("GET /status 503 stale when cloud unreachable", st == 503 and json.loads(body).get("state") == "stale", f"{st} {body[:200]}")
+    st, _, body = req("GET", f"{app}/health")
+    check("GET /health still OK while stale", st == 200 and body.strip() == "OK", f"{st}")
+
+
 def phase_fresh(app: str, fake: str) -> None:
     check("app /health", wait_for(f"{app}/health"), "never healthy")
     check("fake /health", wait_for(f"{fake}/health"), "never healthy")
@@ -212,6 +243,7 @@ def phase_fresh(app: str, fake: str) -> None:
     check("invalid port rejected with 400", st == 400, f"status={st}")
 
     write_verification_checks(app, fake)
+    request_safety_checks(app, fake)
 
     # Let the collector (5 s interval in the smoke stack) store at least one reading.
     time.sleep(12)
@@ -226,11 +258,11 @@ def phase_persist(app: str, fake: str) -> None:
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("phase", choices=["fresh", "persist"])
+    ap.add_argument("phase", choices=["fresh", "persist", "stale"])
     ap.add_argument("--app", default="http://127.0.0.1:18080")
     ap.add_argument("--fake", default="http://127.0.0.1:19000")
     a = ap.parse_args()
-    {"fresh": phase_fresh, "persist": phase_persist}[a.phase](a.app.rstrip("/"), a.fake.rstrip("/"))
+    {"fresh": phase_fresh, "persist": phase_persist, "stale": phase_stale}[a.phase](a.app.rstrip("/"), a.fake.rstrip("/"))
     print(f"\n{a.phase}: {'FAILED ' + str(len(FAILED)) + ' check(s)' if FAILED else 'all checks passed'}")
     return 1 if FAILED else 0
 
