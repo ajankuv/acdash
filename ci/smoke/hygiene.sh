@@ -14,7 +14,8 @@ if [ -n "$envs" ]; then echo "FAIL  image contains env files: $envs"; fail=1; fi
 if ls /app/app/qc_*.py >/dev/null 2>&1; then echo "FAIL  image contains app/qc_*.py"; fail=1; fi
 dumps=$(find /app -name "*dump*.json" -o -name "*.db" -o -name "*.sqlite" 2>/dev/null || true)
 if [ -n "$dumps" ]; then echo "FAIL  image contains data/dump files: $dumps"; fail=1; fi
-if pip show pytest >/dev/null 2>&1; then echo "FAIL  pytest installed in runtime image"; fail=1; fi
+if python -c "import importlib.util,sys; sys.exit(0 if importlib.util.find_spec(\"pytest\") else 1)"; then echo "FAIL  pytest installed in runtime image"; fail=1; fi
+if python -c "import importlib.util,sys; sys.exit(0 if importlib.util.find_spec(\"pip\") else 1)"; then echo "FAIL  pip left in runtime image"; fail=1; fi
 [ $fail -eq 0 ] && echo "PASS  image hygiene"
 exit $fail
 '

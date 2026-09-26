@@ -3,7 +3,11 @@ FROM python:3.12-slim
 WORKDIR /app
 
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# Upgrade the base image's pip, install deps, then remove pip: the running app never needs it,
+# and pip (plus the libraries it vendors) is the only remaining source of fixable CVEs in the image.
+RUN pip install --no-cache-dir --upgrade pip \
+ && pip install --no-cache-dir -r requirements.txt \
+ && pip uninstall -y pip
 
 COPY app ./app
 COPY templates ./templates

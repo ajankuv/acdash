@@ -10,6 +10,14 @@ updates:
       python-minor-patch:
         update-types: [minor, patch]
 
+  - package-ecosystem: pip
+    directory: /ci/fake_acinfinity
+    schedule:
+      interval: weekly
+    groups:
+      fake-api-minor-patch:
+        update-types: [minor, patch]
+
   - package-ecosystem: github-actions
     directory: /
     schedule:
