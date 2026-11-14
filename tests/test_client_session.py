@@ -79,8 +79,7 @@ def test_automation_writes_not_resent_on_expiry(api, method, args):
     c = make_client(api)
     for p in ("/updateGroupsIsOn", "/delByid", "/addGroups"):
         api.queue(p, (200, {"code": 10003, "msg": "Login Expired"}))
-    kwargs = {"is_on": True} if method == "toggle_automation_raw" else {}
-    out = getattr(c, method)(*args, **kwargs)
+    out = getattr(c, method)(*args)
     assert out["code"] == 10003
     writes = sum(api.count(p) for p in ("/updateGroupsIsOn", "/delByid", "/addGroups"))
     assert writes == 1

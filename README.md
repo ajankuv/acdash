@@ -47,9 +47,11 @@ What started as a read-only monitor grew into a full dashboard once I reverse-en
 - Note: after changing a port's **mode**, the cloud reports the new mode on a short device-check-in delay, so the card may show the previous mode for one refresh cycle before it catches up (threshold and speed values update immediately)
 
 **Automation management**
-- "Automations ›" button on each controller card lists all named automation programs
-- Toggle programs on/off, delete them, or create new ones
-- Port assignment uses the same bitmask encoding the official app uses
+- "Automations ›" button on each controller card lists all named automation programs, with mode, level, time window, days and whether each is running right now
+- Turn programs on/off, delete them, or create new time-window ON/OFF programs (windows can cross midnight, e.g. 22:00–06:00 for a night setting). They run on the controller itself, so they keep working when acdash is down
+- Every change is confirmed against AC Infinity before the dashboard says it worked. If AC Infinity can't be reached, you get an error (never a false "done"), and one change runs at a time so a double click can't undo itself
+- Names must be unique per controller
+- Requests use the same encoding the official app does (port bitmask, day byte, query-string records)
 
 ---
 

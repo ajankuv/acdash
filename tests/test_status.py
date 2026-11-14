@@ -87,3 +87,21 @@ def test_fetch_records_success_and_error(monkeypatch):
     main._clear_cache()
     main.get_cached_controllers()
     assert st.snapshot(60)[1]["last_error"] == "No data from AC Infinity"
+
+
+def test_snapshot_refresh_records_success(monkeypatch):
+    """The dashboard's snapshot poll refreshes the cache — it must count for /status, or a
+    polling browser keeps the cache warm and /status reports stale while data is fresh."""
+    monkeypatch.setenv("ACDASH_USE_ENV_CREDENTIALS", "1")
+    monkeypatch.setenv("ACINFINITY_EMAIL", "user@example.com")
+    monkeypatch.setenv("ACINFINITY_PASSWORD", "right")
+    import app.main as main
+    monkeypatch.setattr(main, "_fetch_controllers", lambda: ([{"id": "1", "name": "T"}], None))
+    monkeypatch.setattr(main.env, "get_template", lambda name: type("T", (), {"render": lambda self, **k: ""})())
+    main._clear_cache()
+    st._reset(started=0.0)  # long uptime, never succeeded → stale
+    tc = TestClient(main.app)
+    assert tc.get("/status").status_code == 503
+    assert tc.get("/api/dashboard-snapshot").status_code == 200
+    assert tc.get("/status").status_code == 200
+    main._clear_cache()

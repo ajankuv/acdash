@@ -7,8 +7,14 @@ All data is synthetic (no real account, device IDs, or Wi-Fi names).
 Test hooks (not part of the real API):
   GET  /__writes          → every addDevMode request received (transport, fields)
   POST /__reset           → restore initial state
-  POST /__behavior        → JSON {ignore_writes, expire_next, rate_limit_next, write_code}
+  POST /__behavior        → JSON {ignore_writes, expire_next, rate_limit_next, write_code, groups_fail_next}
   GET  /__calls           → request counts per path (e.g. login count)
+  GET  /__groups          → stored automations per devId
+
+Automations (version=2.0/dev/*Groups*) are stateful and strict, like the real cloud as seen
+live (real controller, 2026-11-14): addGroups takes the record as query params, updateGroupsIsOn
+FLIPS isOn, and delByid deletes only with isDel=true — without it, it flips isOn instead
+(the real bug acdash used to hit).
 """
 from __future__ import annotations
 
@@ -153,6 +159,9 @@ class State:
         # device unless every condition here matches (field name → value, or "header:<name>").
         # None = apply everything (default).
         self.speed_only_needs: dict[str, str] | None = None
+        self.groups: dict[str, dict[str, dict[str, Any]]] = {}  # devId → advId → record
+        self.next_adv_id = 5000
+        self.groups_fail_next = 0   # next N getGroups reads fail (code 999999)
 
     def port(self, dev_id: str, n: int) -> dict[str, Any] | None:
         for d in self.devices:
@@ -346,11 +355,77 @@ async def log_data_by_all(request: Request) -> JSONResponse:
     return _ok({"rows": page, "total": len(page), "validFrom": now - 86400 * 90})
 
 
+_FAIL = {"code": 999999, "msg": "Operation failed, please try again", "data": None}
+
+
 @app.post("/api/version=2.0/dev/getGroups")
 async def get_groups(request: Request) -> JSONResponse:
     if (p := _token_problem(request)) is not None:
         return p
-    return _ok([])
+    if S.groups_fail_next > 0:
+        S.groups_fail_next -= 1
+        return JSONResponse(_FAIL)
+    q, f = await _params(request)
+    dev_id = str({**q, **f}.get("devId"))
+    return _ok([copy.deepcopy(r) for r in S.groups.get(dev_id, {}).values()])
+
+
+def _find_group(adv_id: str | None) -> tuple[dict[str, Any], str] | None:
+    for recs in S.groups.values():
+        if adv_id in recs:
+            return recs, adv_id
+    return None
+
+
+@app.post("/api/version=2.0/dev/addGroups")
+async def add_groups(request: Request) -> JSONResponse:
+    if (p := _token_problem(request)) is not None:
+        return p
+    q, f = await _params(request)
+    # The app sends the whole NetAutomation record as query params with isFlag=true.
+    if f or q.get("isFlag") != "true" or not q.get("advName") or S.port(str(q.get("devId")), 1) is None:
+        return JSONResponse(_FAIL)
+    S.next_adv_id += 1
+    rec = {k: _coerce(v) for k, v in q.items() if k not in ("isFlag", "returnData", "userId", "appId")}
+    rec.update({"advId": S.next_adv_id, "devId": str(q["devId"]), "runState": 0})
+    S.groups.setdefault(str(q["devId"]), {})[str(S.next_adv_id)] = rec
+    return _ok(copy.deepcopy(rec) if q.get("returnData") == "true" else None)
+
+
+@app.post("/api/version=2.0/dev/updateGroupsIsOn")
+async def update_groups_is_on(request: Request) -> JSONResponse:
+    """Real behavior: the same call enables and disables — the server flips isOn."""
+    if (p := _token_problem(request)) is not None:
+        return p
+    q, f = await _params(request)
+    hit = _find_group(q.get("advId"))
+    if f or hit is None:
+        return JSONResponse(_FAIL)
+    recs, adv = hit
+    recs[adv]["isOn"] = 0 if recs[adv].get("isOn") else 1
+    return _ok(None)
+
+
+@app.post("/api/version=2.0/dev/delByid")
+async def del_by_id(request: Request) -> JSONResponse:
+    """Deletes only with isDel=true (query). Without it the real cloud answers 200 and flips isOn."""
+    if (p := _token_problem(request)) is not None:
+        return p
+    q, f = await _params(request)
+    hit = _find_group(q.get("advId") or f.get("advId"))
+    if hit is None:
+        return JSONResponse(_FAIL)
+    recs, adv = hit
+    if q.get("isDel") == "true" and not f:
+        del recs[adv]
+    else:
+        recs[adv]["isOn"] = 0 if recs[adv].get("isOn") else 1
+    return _ok(None)
+
+
+@app.get("/__groups")
+async def groups() -> JSONResponse:
+    return JSONResponse(S.groups)
 
 
 @app.get("/__writes")
@@ -372,7 +447,8 @@ async def reset() -> JSONResponse:
 @app.post("/__behavior")
 async def behavior(request: Request) -> JSONResponse:
     body = json.loads(await request.body() or b"{}")
-    for key in ("ignore_writes", "expire_next", "rate_limit_next", "write_code", "speed_only_needs"):
+    for key in ("ignore_writes", "expire_next", "rate_limit_next", "write_code", "speed_only_needs",
+                "groups_fail_next"):
         if key in body:
             setattr(S, key, body[key])
     return JSONResponse({"ok": True})

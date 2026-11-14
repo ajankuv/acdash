@@ -180,6 +180,10 @@ class ControlError(Exception):
     pass
 
 
+class UpstreamError(ControlError):
+    """AC Infinity could not be reached or did not confirm the change (HTTP 502)."""
+
+
 def build_mode_payload(
     dev_id: str | int,
     port: int,
@@ -680,31 +684,299 @@ def signing_enabled() -> bool:
 
 
 def normalize_automations(raw_list: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Group flat getGroups entries by advName → user-visible automation list.
+    """getGroups entries → user-visible automation list, one row per advId.
 
-    The API returns one entry per port-speed config. Multiple entries with the same
-    advName represent one logical automation; we take the first entry's advId.
-    grouptDevType is a bitmask: bit 0 = port 1, bit 1 = port 2, etc.
+    Keyed by advId (what toggle/delete act on), so two automations that share a name both
+    show and both stay manageable. grouptDevType is a port bitmask: bit 0 = port 1, etc.
     """
     seen: dict[str, dict[str, Any]] = {}
     for item in raw_list:
-        name = str(item.get("advName") or "Unnamed")
-        if name not in seen:
-            bitmask = int(item.get("grouptDevType") or 0)
-            ports = [i + 1 for i in range(8) if bitmask & (1 << i)]
-            seen[name] = {
-                "adv_id": str(item.get("advId") or ""),
-                "name": name,
-                "is_on": bool(item.get("isOn") or item.get("runState")),
-                "ports": ports,
-                "on_speed": int(item.get("onSpeed") or 0),
-            }
+        if not isinstance(item, dict):
+            continue
+        adv_id = str(item.get("advId") or "")
+        if not adv_id or adv_id in seen:
+            continue
+        bitmask = _as_int(item.get("grouptDevType"))
+        day_bits = _as_int(item.get("switchTime"))
+        seen[adv_id] = {
+            "adv_id": adv_id,
+            "name": str(item.get("advName") or "Unnamed"),
+            # isOn = enabled; runState = currently acting (inside its window / trigger met)
+            "is_on": bool(_as_int(item.get("isOn"))),
+            "running": bool(_as_int(item.get("runState"))),
+            "ports": [i + 1 for i in range(8) if bitmask & (1 << i)],
+            "on_speed": _as_int(item.get("onSpeed")),
+            "off_speed": _as_int(item.get("offSpeed")),
+            "mode": AUTOMATION_MODE_NAMES.get(_as_int(item.get("currentMode")), "other"),
+            "continuous": bool(day_bits & AUTOMATION_CONTINUOUS),
+            "days": [d for d, bit in AUTOMATION_DAY_BITS.items() if day_bits & bit],
+            "begin_mins": _as_int(item.get("beginTime")),
+            "end_mins": _as_int(item.get("endTime")),
+        }
     return list(seen.values())
 
 
+def _as_int(v: Any) -> int:
+    try:
+        return int(v or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _read_automations(client: "ACInfinityClient", dev_id: str) -> list[dict[str, Any]]:
+    raw = client.get_automations_raw(dev_id)
+    if raw is None:
+        raise UpstreamError("Could not read the automation list from AC Infinity — try again.")
+    return raw
+
+
 def get_automations(client: "ACInfinityClient", dev_id: str) -> list[dict[str, Any]]:
-    """Fetch and normalize named automation programs for a controller."""
-    return normalize_automations(client.get_automations_raw(dev_id))
+    """Fetch and normalize named automation programs. Raises UpstreamError if the read fails."""
+    return normalize_automations(_read_automations(client, dev_id))
+
+
+# ── Automation create / enable (app 2.0.0 NetAutomation; verified live on a real controller) ──
+# Automation modes are NOT port atTypes: 1 = ON, 2 = OFF (p5.getFormattedModeName).
+AUTOMATION_MODE_ON = 1
+AUTOMATION_MODE_OFF = 2
+AUTOMATION_MODE_NAMES = {1: "on", 2: "off", 3: "cycle", 4: "auto", 6: "vpd"}
+# switchTime day byte (el.timeConversion): bit 7 = run continuously (window ignored).
+AUTOMATION_CONTINUOUS = 0x80
+AUTOMATION_DAY_BITS = {"mon": 1, "tue": 2, "wed": 4, "thu": 8, "fri": 16, "sat": 32, "sun": 64}
+AUTOMATION_EVERY_DAY = 0x7F
+_DAY_NAMES = {
+    **{d: d for d in AUTOMATION_DAY_BITS},
+    "monday": "mon", "tuesday": "tue", "wednesday": "wed", "thursday": "thu",
+    "friday": "fri", "saturday": "sat", "sunday": "sun",
+}
+
+# Every NetAutomation field the app sends, at the app's neutral defaults.
+_AUTOMATION_DEFAULTS: dict[str, Any] = {
+    "isDel": "false", "isExist": 1, "templateType": 0, "groupNums": 0, "sortType": 0,
+    "subNumber": 0, "subNumberSort": 0, "portType": 0, "portState": 0, "runState": 0,
+    "onTimeSwitch": 0, "onTime": 0, "cycleOn": 0, "cycleOff": 0, "setSelect": 0,
+    "temperatureFTrans": 0, "humidityTrans": 0, "vpdTrans": 0, "temperatureFBuff": 0,
+    "humidityBuff": 0, "vpdBuff": 0, "switchTemperatureFBuff": 0, "switchHumidityBuff": 0,
+    "switchVpdBuff": 0, "autoHighTempF": 32, "autoHighTempC": 0, "autoLowTempF": 32,
+    "autoLowTempC": 0, "autoHighHumi": 100, "autoLowHumi": 0, "autoHighTempSwitch": 0,
+    "autoLowTempSwitch": 0, "autoHighHumiSwitch": 0, "autoLowHumiSwitch": 0, "highVpd": 99,
+    "lowVpd": 0, "highVpdSwitch": 0, "lowVpdSwitch": 0, "targetTSwitch": 0,
+    "targetHumiSwitch": 0, "targetVpdSwitch": 0, "settingMode": 0, "targetTemp": 0,
+    "targetTempF": 32, "targetHumi": 0, "targetVpd": 0, "isOnMinMaxTime": 1, "onMinTime": 0,
+    "onMaxTime": 0, "isOpenDoseTime": 0, "onDoseTime": 0, "offDoseTime": 0,
+    "photocellSwitch": 0, "dualZoneSwitch": 1, "sensorModeData": "[]", "sensorModeDataNum": 0,
+    "fanLevel": 0, "dynamicWindEn": 0, "minLevel": 0, "timerOff": 0, "targetSwitch": 0,
+    "triggerSwitch": 0, "triggerValue": 0, "targetValue": 0, "buff": 0, "trans": 0,
+}
+
+
+def day_byte(days: list[str] | None, *, continuous: bool = False) -> int:
+    """Build the switchTime byte. ``days`` None/empty = every day."""
+    if continuous:
+        return AUTOMATION_CONTINUOUS | AUTOMATION_EVERY_DAY
+    if not days:
+        return AUTOMATION_EVERY_DAY
+    out = 0
+    for d in days:
+        key = _DAY_NAMES.get(d.strip().lower()) if isinstance(d, str) else None
+        if key is None:
+            raise ValueError(f"Unknown day {d!r} (use mon, tue, … or monday, tuesday, …)")
+        out |= AUTOMATION_DAY_BITS[key]
+    return out
+
+
+def build_automation_payload(
+    *,
+    name: str,
+    ports: list[int],
+    begin_mins: int,
+    end_mins: int,
+    mode: int = AUTOMATION_MODE_ON,
+    on_speed: int = 5,
+    off_speed: int = 0,
+    days: list[str] | None = None,
+    continuous: bool = False,
+    enabled: bool = True,
+    dev_version: int = 0,
+) -> dict[str, Any]:
+    """Full addGroups record for a time-window ON/OFF automation on standard controllers.
+
+    ``begin_mins``/``end_mins`` are minutes of day (0–1439); begin > end crosses midnight
+    (e.g. 22:00→06:00). Raises ValueError on bad input.
+    """
+    name = str(name or "").strip()[:64]
+    if not name:
+        raise ValueError("Name is required")
+    if not ports or any(not 1 <= int(p) <= 8 for p in ports):
+        raise ValueError("Pick at least one port (1–8)")
+    if mode not in (AUTOMATION_MODE_ON, AUTOMATION_MODE_OFF):
+        raise ValueError("Only ON and OFF automations are supported here")
+    for label, v in (("Start", begin_mins), ("End", end_mins)):
+        if not 0 <= int(v) <= 1439:
+            raise ValueError(f"{label} time must be 00:00–23:59")
+    if not continuous and int(begin_mins) == int(end_mins):
+        raise ValueError("Start and end time can't be the same")
+    for label, v in (("On level", on_speed), ("Off level", off_speed)):
+        if not 0 <= int(v) <= 10:
+            raise ValueError(f"{label} must be 0–10")
+    return {
+        **_AUTOMATION_DEFAULTS,
+        "advName": name,
+        "isOn": 1 if enabled else 0,
+        "switchTime": day_byte(days, continuous=continuous),
+        "beginTime": int(begin_mins),
+        "endTime": int(end_mins),
+        "grouptDevType": sum(1 << (int(p) - 1) for p in set(ports)),
+        "currentMode": mode,
+        "onSpeed": int(on_speed),
+        "offSpeed": int(off_speed),
+        "devVersion": int(dev_version or 0),
+    }
+
+
+# One automation change at a time per process: enable/disable is read-then-FLIP, so two
+# overlapping requests (double click, retry) would otherwise flip twice and cancel out.
+_automation_lock = threading.Lock()
+AUTOMATION_LOCK_WAIT_SECS = 45.0
+AUTOMATION_CONFIRM_SECS = 12.0
+_POLL_SECS = 2.0
+_sleep = time.sleep
+_clock = time.monotonic
+
+
+class _AutomationLock:
+    def __enter__(self) -> None:
+        if not _automation_lock.acquire(timeout=AUTOMATION_LOCK_WAIT_SECS):
+            raise ControlError("Another automation change is still running — try again in a moment.")
+
+    def __exit__(self, *exc: Any) -> None:
+        _automation_lock.release()
+
+
+def _find_automation(client: "ACInfinityClient", dev_id: str, adv_id: str) -> dict[str, Any] | None:
+    """The automation with ``adv_id``, or None if a SUCCESSFUL read doesn't list it."""
+    return next((a for a in _read_automations(client, dev_id) if str(a.get("advId")) == str(adv_id)), None)
+
+
+def _check_write(result: Any, what: str) -> None:
+    if not isinstance(result, dict):
+        raise UpstreamError("Could not reach AC Infinity — refresh the list and check before retrying.")
+    if result.get("code") != 200:
+        raise ControlError(str(result.get("msg") or f"AC Infinity rejected the {what}."))
+
+
+def _poll(check: Any, *, wait_secs: float | None, sleep: Any, clock: Any) -> bool:
+    """Call ``check()`` until it returns True or ``wait_secs`` of real time pass.
+
+    A failed read inside the loop counts as "not yet" — only the final verdict matters.
+    Defaults are looked up at call time (module ``AUTOMATION_CONFIRM_SECS`` / ``_sleep`` /
+    ``_clock``) so tests can shorten them.
+    """
+    sleep = sleep or _sleep
+    clock = clock or _clock
+    deadline = clock() + (AUTOMATION_CONFIRM_SECS if wait_secs is None else wait_secs)
+    while True:
+        try:
+            if check():
+                return True
+        except UpstreamError:
+            pass
+        if clock() >= deadline:
+            return False
+        sleep(_POLL_SECS)
+
+
+def set_automation_enabled(
+    client: "ACInfinityClient",
+    dev_id: str,
+    adv_id: str,
+    is_on: bool,
+    *,
+    wait_secs: float | None = None,
+    sleep: Any = None,
+    clock: Any = None,
+) -> str:
+    """Enable/disable an automation. The API call FLIPS state, so read first and only flip
+    when needed, then confirm. Returns "unchanged" or "changed"; raises ControlError otherwise.
+    """
+    with _AutomationLock():
+        current = _find_automation(client, dev_id, adv_id)
+        if current is None:
+            raise ControlError("That automation no longer exists — refresh the list.")
+        if bool(_as_int(current.get("isOn"))) == is_on:
+            return "unchanged"
+        _check_write(client.toggle_automation_raw(dev_id, adv_id), "change")
+
+        def switched() -> bool:
+            now = _find_automation(client, dev_id, adv_id)
+            return now is not None and bool(_as_int(now.get("isOn"))) == is_on
+
+        if not _poll(switched, wait_secs=wait_secs, sleep=sleep, clock=clock):
+            raise UpstreamError("AC Infinity accepted the change but didn't confirm it — refresh and check.")
+        return "changed"
+
+
+def delete_automation(
+    client: "ACInfinityClient",
+    dev_id: str,
+    adv_id: str,
+    *,
+    wait_secs: float | None = None,
+    sleep: Any = None,
+    clock: Any = None,
+) -> str:
+    """Delete an automation and confirm it is gone. Returns "deleted" or "already_gone".
+
+    "Gone" is only accepted from a read that succeeded; a failed read raises UpstreamError.
+    """
+    with _AutomationLock():
+        if _find_automation(client, dev_id, adv_id) is None:
+            return "already_gone"
+        _check_write(client.delete_automation_raw(dev_id, adv_id), "delete")
+
+        def gone() -> bool:
+            return _find_automation(client, dev_id, adv_id) is None
+
+        if not _poll(gone, wait_secs=wait_secs, sleep=sleep, clock=clock):
+            raise UpstreamError("AC Infinity said deleted but the automation is still listed — refresh and check.")
+        return "deleted"
+
+
+def create_automation(
+    client: "ACInfinityClient",
+    dev_id: str,
+    payload: dict[str, Any],
+    *,
+    wait_secs: float | None = None,
+    sleep: Any = None,
+    clock: Any = None,
+) -> str:
+    """Create an automation from ``build_automation_payload`` output and confirm it is listed.
+
+    Names must be unique per controller (case-insensitive): the list and the user tell
+    automations apart by name, and it stops a double-submitted form creating two.
+    Returns the new advId.
+    """
+    name = str(payload.get("advName") or "").strip()
+    with _AutomationLock():
+        before = _read_automations(client, dev_id)
+        if any(str(a.get("advName") or "").strip().lower() == name.lower() for a in before):
+            raise ControlError(f'An automation called "{name}" already exists — pick another name.')
+        known = {str(a.get("advId")) for a in before}
+        _check_write(client.create_automation_raw(dev_id, payload), "new automation")
+        found: list[str] = []
+
+        def listed() -> bool:
+            for a in _read_automations(client, dev_id):
+                adv = str(a.get("advId"))
+                if adv not in known and str(a.get("advName") or "").strip() == name:
+                    found.append(adv)
+                    return True
+            return False
+
+        if not _poll(listed, wait_secs=wait_secs, sleep=sleep, clock=clock):
+            raise UpstreamError("AC Infinity accepted the automation but it isn't listed yet — refresh and check.")
+        return found[0]
 
 
 def _reset_rate_limit() -> None:

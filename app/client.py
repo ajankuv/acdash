@@ -27,6 +27,8 @@ AUTOMATIONS_ENDPOINT = f"{API_BASE}/version=2.0/dev/getGroups"
 AUTOMATION_TOGGLE_ENDPOINT = f"{API_BASE}/version=2.0/dev/updateGroupsIsOn"
 AUTOMATION_DELETE_ENDPOINT = f"{API_BASE}/version=2.0/dev/delByid"
 AUTOMATION_CREATE_ENDPOINT = f"{API_BASE}/version=2.0/dev/addGroups"
+# Automation calls run while a user waits on a click: fail fast instead of the 120 s default.
+AUTOMATION_TIMEOUT_SECS = 15.0
 
 
 def _normalize_password(secret: str) -> str:
@@ -155,6 +157,7 @@ class ACInfinityClient:
         self._log_lock = threading.Lock()
         self._last_log_call = 0.0
         self._dev_types: dict[str, int] = {}
+        self._dev_versions: dict[str, int] = {}
         # Injectable for tests.
         self._sleep = time.sleep
         self._monotonic = time.monotonic
@@ -401,8 +404,16 @@ class ACInfinityClient:
                     self._dev_types[str(d["devId"])] = int(d.get("devType"))
                 except (TypeError, ValueError):
                     pass
+                try:
+                    self._dev_versions[str(d["devId"])] = int(d.get("devVersion") or 0)
+                except (TypeError, ValueError):
+                    pass
         logger.debug("Retrieved %d devices", len(devices))
         return devices
+
+    def dev_version(self, dev_id: str | int) -> int:
+        """Controller ``devVersion`` from the last device list (0 if unknown)."""
+        return self._dev_versions.get(str(dev_id), 0)
 
     def get_dev_mode_setting_list(self, dev_id: str | int, port: int) -> dict[str, Any] | None:
         """Full JSON body from getdevModeSettingList."""
@@ -457,56 +468,77 @@ class ACInfinityClient:
             return self._request(url, data=fields, headers=extra, header_fn=headers, retry_on_expired=False)
         return self._request(url, params=fields, headers=extra, header_fn=headers, retry_on_expired=False)
 
-    def get_automations_raw(self, dev_id: str | int) -> list[dict[str, Any]]:
-        """POST version=2.0/dev/getGroups — raw named automation program list."""
+    def get_automations_raw(
+        self, dev_id: str | int, *, timeout: float | None = AUTOMATION_TIMEOUT_SECS
+    ) -> list[dict[str, Any]] | None:
+        """POST version=2.0/dev/getGroups — raw named automation program list.
+
+        Returns None when the list could not be read (network, HTTP or non-200 reply) so
+        callers never mistake a failed read for "no automations".
+        """
         body = self._request(
             AUTOMATIONS_ENDPOINT,
             data={"devId": str(dev_id), "userId": self.token},
             header_fn=lambda: self._v2_headers(dev_id),
+            timeout=timeout,
         )
         if body is None:
             logger.error("getGroups failed")
-            return []
+            return None
         if body.get("code") != 200:
             logger.warning("getGroups non-200: %s", body.get("msg"))
+            return None
+        data = body.get("data")
+        if data is None:
             return []
-        data = body.get("data") or []
-        return data if isinstance(data, list) else []
+        if not isinstance(data, list):
+            logger.warning("getGroups returned %s, not a list", type(data).__name__)
+            return None
+        return [item for item in data if isinstance(item, dict)]
 
-    def toggle_automation_raw(
-        self, dev_id: str | int, adv_id: str | int, *, is_on: bool
-    ) -> dict[str, Any] | None:
-        """POST version=2.0/dev/updateGroupsIsOn."""
+    def toggle_automation_raw(self, dev_id: str | int, adv_id: str | int) -> dict[str, Any] | None:
+        """POST version=2.0/dev/updateGroupsIsOn — FLIPS the automation's on/off state.
+
+        The app sends the same call to enable and to disable (``advId``, ``isDel=0``,
+        ``isflag=1`` as query params; app 2.0.0 ``advance/a.java:635``), so the server toggles.
+        Use ``control.set_automation_enabled`` to reach a wanted state.
+        """
         return self._request(
             AUTOMATION_TOGGLE_ENDPOINT,
-            data={
-                "devId": str(dev_id),
-                "advId": str(adv_id),
-                "isflag": 1 if is_on else 0,
-                "isDel": 0,
-            },
+            params={"advId": str(adv_id), "isDel": 0, "isflag": 1},
             header_fn=lambda: self._v2_headers(dev_id),
             retry_on_expired=False,
+            timeout=AUTOMATION_TIMEOUT_SECS,
         )
 
     def delete_automation_raw(self, dev_id: str | int, adv_id: str | int) -> dict[str, Any] | None:
-        """POST version=2.0/dev/delByid."""
+        """POST version=2.0/dev/delByid — deletes the automation.
+
+        Must match the app (``advId``, ``isDel=true``, ``isflag=true`` as query params). The old
+        form body without ``isDel`` returned 200 but ENABLED the automation instead (live on a real
+        controller, 2026-11-14).
+        """
         return self._request(
             AUTOMATION_DELETE_ENDPOINT,
-            data={"devId": str(dev_id), "advId": str(adv_id)},
+            params={"advId": str(adv_id), "isDel": "true", "isflag": "true"},
             header_fn=lambda: self._v2_headers(dev_id),
             retry_on_expired=False,
+            timeout=AUTOMATION_TIMEOUT_SECS,
         )
 
     def create_automation_raw(
         self, dev_id: str | int, payload: dict[str, Any]
     ) -> dict[str, Any] | None:
-        """POST version=2.0/dev/addGroups."""
+        """POST version=2.0/dev/addGroups — full record as query params, like the app.
+
+        Build ``payload`` with ``control.build_automation_payload``.
+        """
         return self._request(
             AUTOMATION_CREATE_ENDPOINT,
-            data={**payload, "devId": str(dev_id), "userId": self.token},
+            params={**payload, "devId": str(dev_id), "isFlag": "true", "returnData": "true"},
             header_fn=lambda: self._v2_headers(dev_id),
             retry_on_expired=False,
+            timeout=AUTOMATION_TIMEOUT_SECS,
         )
 
     def history_data_page(

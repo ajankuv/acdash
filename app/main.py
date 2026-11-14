@@ -15,6 +15,7 @@ from urllib.parse import urljoin, urlunparse
 
 from dotenv import dotenv_values
 from fastapi import FastAPI, Form, Query, Request
+from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
@@ -26,7 +27,12 @@ from app.debug_bundle import collect_debug_bundle
 from app.control import (
     ControlError,
     RateLimitError,
+    UpstreamError,
+    build_automation_payload,
+    create_automation,
+    delete_automation,
     get_automations,
+    set_automation_enabled,
     get_write_format,
     read_port_settings,
     write_port_control,
@@ -211,6 +217,13 @@ def get_cached_controllers() -> tuple[list[dict], str | None, float]:
         return _cache["controllers"], _cache["error"], last  # type: ignore[return-value]
 
     controllers, err = _fetch_controllers()
+    _store_fetch(controllers, err, now)
+    return controllers, err, now
+
+
+def _store_fetch(controllers: list[dict], err: str | None, now: float) -> None:
+    """Cache a real cloud fetch and record it for /status — every fetch path must use this,
+    or a path that refreshes the cache leaves /status reporting stale data."""
     if controllers and not err:
         service_status.record_success()
     else:
@@ -218,7 +231,6 @@ def get_cached_controllers() -> tuple[list[dict], str | None, float]:
     _cache["controllers"] = controllers
     _cache["error"] = err
     _cache["at"] = now
-    return controllers, err, now
 
 
 @app.get("/health")
@@ -322,9 +334,7 @@ def dashboard_snapshot() -> JSONResponse:
         )
 
     controllers, error = _fetch_controllers()
-    _cache["controllers"] = controllers
-    _cache["error"] = error
-    _cache["at"] = time.monotonic()
+    _store_fetch(controllers, error, time.monotonic())
 
     cards_html = env.get_template("partials/cards_only.html").render(controllers=controllers)
     show_empty = not controllers and error is None
@@ -426,7 +436,8 @@ async def api_port_control(request: Request) -> JSONResponse:
     if not email or not password:
         return JSONResponse({"error": "Unauthorized"}, status_code=401)
     client = get_client(email, password)
-    return _write_and_verify(client, dev_id, port, changes)
+    # Off the event loop: the write path makes blocking cloud calls (up to the httpx timeout).
+    return await run_in_threadpool(_write_and_verify, client, dev_id, port, changes)
 
 
 def _write_and_verify(
@@ -493,12 +504,52 @@ async def api_port_restore(request: Request) -> JSONResponse:
     if not email or not password:
         return JSONResponse({"error": "Unauthorized"}, status_code=401)
     client = get_client(email, password)
-    return _write_and_verify(client, dev_id, port, {}, restore_record=snap["record"])
+    return await run_in_threadpool(_write_and_verify, client, dev_id, port, {}, restore_record=snap["record"])
+
+
+def _automation_error(e: ControlError) -> JSONResponse:
+    """UpstreamError (AC Infinity unreachable / unconfirmed) → 502; other refusals → 400."""
+    return JSONResponse({"error": str(e)}, status_code=502 if isinstance(e, UpstreamError) else 400)
+
+
+_MISSING = object()
+
+
+def _body_int(body: dict[str, Any], key: str, label: str, default: Any = _MISSING) -> int:
+    """A JSON integer from ``body`` (no bools, floats or strings). Raises ValueError."""
+    v = body.get(key, _MISSING)
+    if v is _MISSING or v is None:
+        if default is _MISSING:
+            raise ValueError(f"{label} is required")
+        return default
+    if isinstance(v, bool) or not isinstance(v, int):
+        raise ValueError(f"{label} must be a whole number")
+    return v
+
+
+def _body_bool(body: dict[str, Any], key: str, label: str, default: Any = _MISSING) -> bool:
+    v = body.get(key, _MISSING)
+    if v is _MISSING or v is None:
+        if default is _MISSING:
+            raise ValueError(f"{label} is required")
+        return default
+    if not isinstance(v, bool):
+        raise ValueError(f"{label} must be true or false")
+    return v
+
+
+def _automation_ids(body: dict[str, Any]) -> tuple[str, str] | JSONResponse:
+    dev_id, adv_id = body.get("dev_id"), body.get("adv_id")
+    if not isinstance(dev_id, (str, int)) or isinstance(dev_id, bool) or not str(dev_id).strip():
+        return JSONResponse({"error": "dev_id is required"}, status_code=400)
+    if not isinstance(adv_id, (str, int)) or isinstance(adv_id, bool) or not str(adv_id).strip():
+        return JSONResponse({"error": "adv_id is required"}, status_code=400)
+    return str(dev_id).strip(), str(adv_id).strip()
 
 
 @app.get("/api/automations")
-def api_automations(dev_id: str = Query("", alias="dev_id")) -> JSONResponse:
-    """Return named automation programs for a controller."""
+async def api_automations(dev_id: str = Query("", alias="dev_id")) -> JSONResponse:
+    """Return named automation programs for a controller (502 if AC Infinity can't be read)."""
     if not credentials_configured():
         return JSONResponse({"error": "Unauthorized"}, status_code=401)
     dev_id = dev_id.strip()
@@ -508,102 +559,120 @@ def api_automations(dev_id: str = Query("", alias="dev_id")) -> JSONResponse:
     if not email or not password:
         return JSONResponse({"error": "Unauthorized"}, status_code=401)
     client = get_client(email, password)
-    automations = get_automations(client, dev_id)
-    return JSONResponse(automations)
+    try:
+        automations = await run_in_threadpool(get_automations, client, dev_id)
+    except ControlError as e:
+        return _automation_error(e)
+    return JSONResponse(automations, headers={"Cache-Control": "no-store"})
 
 
 @app.post("/api/automation-toggle")
 async def api_automation_toggle(request: Request) -> JSONResponse:
-    """Enable or disable a named automation program."""
+    """Enable or disable a named automation program (idempotent: ``is_on`` is the wanted state)."""
     if not credentials_configured():
         return JSONResponse({"error": "Unauthorized"}, status_code=401)
     body, err = await read_json_body(request)
     if err is not None:
         return err
-    dev_id = str(body.get("dev_id") or "").strip()
-    adv_id = str(body.get("adv_id") or "").strip()
-    is_on = bool(body.get("is_on"))
-    if not dev_id or not adv_id:
-        return JSONResponse({"error": "dev_id and adv_id are required"}, status_code=400)
+    ids = _automation_ids(body)
+    if isinstance(ids, JSONResponse):
+        return ids
+    dev_id, adv_id = ids
+    try:
+        is_on = _body_bool(body, "is_on", "is_on")
+    except ValueError as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
     email, password = _get_credentials()
     if not email or not password:
         return JSONResponse({"error": "Unauthorized"}, status_code=401)
     client = get_client(email, password)
-    result = client.toggle_automation_raw(dev_id, adv_id, is_on=is_on)
-    if result is None:
-        return JSONResponse({"error": "Could not reach AC Infinity"}, status_code=502)
-    code = result.get("code") if isinstance(result, dict) else None
-    if code != 200:
-        msg = result.get("msg", "") if isinstance(result, dict) else ""
-        return JSONResponse({"error": msg or "Command failed"}, status_code=400)
-    return JSONResponse({"ok": True})
+    try:
+        outcome = await run_in_threadpool(set_automation_enabled, client, dev_id, adv_id, is_on)
+    except ControlError as e:
+        return _automation_error(e)
+    return JSONResponse({"ok": True, "outcome": outcome})
 
 
 @app.delete("/api/automation")
 async def api_automation_delete(request: Request) -> JSONResponse:
-    """Delete a named automation program."""
+    """Delete a named automation program and confirm it is gone."""
     if not credentials_configured():
         return JSONResponse({"error": "Unauthorized"}, status_code=401)
     body, err = await read_json_body(request)
     if err is not None:
         return err
-    dev_id = str(body.get("dev_id") or "").strip()
-    adv_id = str(body.get("adv_id") or "").strip()
-    if not dev_id or not adv_id:
-        return JSONResponse({"error": "dev_id and adv_id are required"}, status_code=400)
+    ids = _automation_ids(body)
+    if isinstance(ids, JSONResponse):
+        return ids
+    dev_id, adv_id = ids
     email, password = _get_credentials()
     if not email or not password:
         return JSONResponse({"error": "Unauthorized"}, status_code=401)
     client = get_client(email, password)
-    result = client.delete_automation_raw(dev_id, adv_id)
-    if result is None:
-        return JSONResponse({"error": "Could not reach AC Infinity"}, status_code=502)
-    code = result.get("code") if isinstance(result, dict) else None
-    if code != 200:
-        msg = result.get("msg", "") if isinstance(result, dict) else ""
-        return JSONResponse({"error": msg or "Command failed"}, status_code=400)
-    return JSONResponse({"ok": True})
+    try:
+        outcome = await run_in_threadpool(delete_automation, client, dev_id, adv_id)
+    except ControlError as e:
+        return _automation_error(e)
+    return JSONResponse({"ok": True, "outcome": outcome})
+
+
+def _parse_create_body(body: dict[str, Any], dev_version: int) -> dict[str, Any]:
+    """Validate an automation-create body strictly → addGroups payload. Raises ValueError."""
+    name = body.get("name")
+    if not isinstance(name, str):
+        raise ValueError("Name is required")
+    ports = body.get("ports")
+    if not isinstance(ports, list) or any(isinstance(p, bool) or not isinstance(p, int) for p in ports):
+        raise ValueError("ports must be a list of port numbers")
+    mode_s = body.get("mode", "on")
+    mode = {"on": 1, "off": 2}.get(mode_s.strip().lower()) if isinstance(mode_s, str) else None
+    if mode is None:
+        raise ValueError("mode must be 'on' or 'off'")
+    days = body.get("days")
+    if days is not None and (not isinstance(days, list) or not all(isinstance(d, str) for d in days)):
+        raise ValueError("days must be a list of day names, e.g. [\"mon\", \"tue\"]")
+    continuous = _body_bool(body, "continuous", "continuous", False)
+    window_default = 0 if continuous else _MISSING
+    return build_automation_payload(
+        name=name,
+        ports=ports,
+        begin_mins=_body_int(body, "begin_mins", "Start time", window_default),
+        end_mins=_body_int(body, "end_mins", "End time", window_default),
+        mode=mode,
+        on_speed=_body_int(body, "on_speed", "On level", 5),
+        off_speed=_body_int(body, "off_speed", "Off level", 0),
+        days=days or None,
+        continuous=continuous,
+        enabled=_body_bool(body, "enabled", "enabled", True),
+        dev_version=dev_version,
+    )
 
 
 @app.post("/api/automation-create")
 async def api_automation_create(request: Request) -> JSONResponse:
-    """Create a new named automation program."""
+    """Create a time-window ON/OFF automation (controller-native: runs even if acdash is down)."""
     if not credentials_configured():
         return JSONResponse({"error": "Unauthorized"}, status_code=401)
     body, err = await read_json_body(request)
     if err is not None:
         return err
-    dev_id = str(body.get("dev_id") or "").strip()
-    name = str(body.get("name") or "").strip()[:64]
-    ports: list[int] = [int(p) for p in (body.get("ports") or []) if str(p).isdigit() and 1 <= int(p) <= 8]
-    on_speed = int(body.get("on_speed") or 5)
-    off_speed = int(body.get("off_speed") or 0)
-    begin_mins = int(body.get("begin_mins") or 0)
-    end_mins = int(body.get("end_mins") or 1439)
-    if not dev_id or not name or not ports:
-        return JSONResponse({"error": "dev_id, name, and ports are required"}, status_code=400)
-    bitmask = sum(1 << (p - 1) for p in ports)
-    payload = {
-        "advName": name,
-        "grouptDevType": bitmask,
-        "onSpeed": on_speed,
-        "offSpeed": off_speed,
-        "beginTime": begin_mins,
-        "endTime": end_mins,
-        "isOn": 1,
-    }
+    dev_id = body.get("dev_id")
+    if not isinstance(dev_id, (str, int)) or isinstance(dev_id, bool) or not str(dev_id).strip():
+        return JSONResponse({"error": "dev_id is required"}, status_code=400)
+    dev_id = str(dev_id).strip()
     email, password = _get_credentials()
     if not email or not password:
         return JSONResponse({"error": "Unauthorized"}, status_code=401)
     client = get_client(email, password)
-    result = client.create_automation_raw(dev_id, payload)
-    if result is None:
-        return JSONResponse({"error": "Could not reach AC Infinity"}, status_code=502)
-    code = result.get("code") if isinstance(result, dict) else None
-    if code != 200:
-        msg = result.get("msg", "") if isinstance(result, dict) else ""
-        return JSONResponse({"error": msg or "Command failed"}, status_code=400)
-    return JSONResponse({"ok": True})
+    try:
+        payload = _parse_create_body(body, client.dev_version(dev_id))
+    except ValueError as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+    try:
+        adv_id = await run_in_threadpool(create_automation, client, dev_id, payload)
+    except ControlError as e:
+        return _automation_error(e)
+    return JSONResponse({"ok": True, "adv_id": adv_id})
 
 
 _activity_cache: dict[str, dict[str, Any]] = {}

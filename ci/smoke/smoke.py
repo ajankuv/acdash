@@ -4,7 +4,7 @@
 Stdlib only (runs on the CI host with any Python 3.9+). Phases:
   fresh    — no credentials: / redirects to setup, wrong password is rejected,
              correct password is saved, dashboard + APIs render fake controllers,
-             a port write reaches the fake API.
+             a port write reaches the fake API, automations create/toggle/delete.
   persist  — after a container restart: saved credentials and history survive.
 
 Usage: smoke.py fresh|persist [--app http://127.0.0.1:18080] [--fake http://127.0.0.1:19000]
@@ -181,6 +181,63 @@ def request_safety_checks(app: str, fake: str) -> None:
     check("cross-site POST refused, nothing written", code == 403 and after == before, f"status={code} writes {before}->{after}")
 
 
+def _fake_groups(fake: str) -> list[dict]:
+    return list(json.loads(req("GET", f"{fake}/__groups")[2]).get(DEV1, {}).values())
+
+
+def _behave(fake: str, **kw) -> None:
+    req("POST", f"{fake}/__behavior", data=json.dumps(kw).encode(), ctype="application/json")
+
+
+def automation_checks(app: str, fake: str) -> None:
+    """Create → disable → disable again → enable → delete against the strict, stateful fake."""
+    st, _, body = req("GET", f"{app}/api/automations?dev_id={DEV1}")
+    check("automation list starts empty", st == 200 and json.loads(body) == [], f"{st} {body[:200]}")
+
+    new = {"dev_id": DEV1, "name": "CI Night", "ports": [2], "begin_mins": 1320, "end_mins": 360, "on_speed": 3}
+    st, out = post_json(f"{app}/api/automation-create", new)
+    recs = _fake_groups(fake)
+    check("create → one windowed automation stored", st == 200 and out.get("ok") and len(recs) == 1
+          and recs[0].get("switchTime") == 127 and recs[0].get("beginTime") == 1320 and recs[0].get("isOn") == 1,
+          f"{st} {out} {recs}")
+    adv = str(out.get("adv_id") or "")
+    st, out = post_json(f"{app}/api/automation-create", new)
+    check("duplicate name refused, nothing created", st == 400 and len(_fake_groups(fake)) == 1, f"{st} {out}")
+
+    def toggle(is_on):
+        return post_json(f"{app}/api/automation-toggle", {"dev_id": DEV1, "adv_id": adv, "is_on": is_on})
+
+    st, out = toggle(False)
+    check("disable → changed", st == 200 and out.get("outcome") == "changed" and _fake_groups(fake)[0]["isOn"] == 0, f"{st} {out}")
+    st, out = toggle(False)
+    check("disable again → unchanged (no second flip)", st == 200 and out.get("outcome") == "unchanged"
+          and _fake_groups(fake)[0]["isOn"] == 0, f"{st} {out}")
+    st, out = toggle(True)
+    check("enable → changed", st == 200 and out.get("outcome") == "changed" and _fake_groups(fake)[0]["isOn"] == 1, f"{st} {out}")
+    st, out = toggle("false")
+    check("text 'false' refused", st == 400 and _fake_groups(fake)[0]["isOn"] == 1, f"{st} {out}")
+
+    _behave(fake, groups_fail_next=1)
+    st, _, body = req("GET", f"{app}/api/automations?dev_id={DEV1}")
+    check("unreadable list → 502, not an empty list", st == 502, f"{st} {body[:200]}")
+
+    def delete():
+        st, _, body = req("DELETE", f"{app}/api/automation", data=json.dumps({"dev_id": DEV1, "adv_id": adv}).encode(),
+                          ctype="application/json")
+        try:
+            return st, json.loads(body)
+        except ValueError:
+            return st, {"raw": body[:200]}
+
+    _behave(fake, groups_fail_next=50)
+    st, out = delete()
+    _behave(fake, groups_fail_next=0)
+    check("delete while list unreadable → 502, automation kept", st == 502 and len(_fake_groups(fake)) == 1, f"{st} {out}")
+    st, out = delete()
+    check("delete → deleted and gone", st == 200 and out.get("outcome") == "deleted" and _fake_groups(fake) == [],
+          f"{st} {out} {_fake_groups(fake)}")
+
+
 def phase_stale(app: str, fake: str) -> None:
     """Run after the fake cloud is stopped: /status must go stale while /health stays up."""
     deadline = time.time() + 60
@@ -244,6 +301,7 @@ def phase_fresh(app: str, fake: str) -> None:
 
     write_verification_checks(app, fake)
     request_safety_checks(app, fake)
+    automation_checks(app, fake)
 
     # Let the collector (5 s interval in the smoke stack) store at least one reading.
     time.sleep(12)

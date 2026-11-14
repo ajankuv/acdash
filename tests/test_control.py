@@ -429,14 +429,15 @@ def test_write_port_control_refuses_partial_write_on_none_read():
     client.set_port_mode.assert_not_called()
 
 
-def test_normalize_automations_groups_by_name():
+def test_normalize_automations_one_row_per_adv_id():
     raw = [
         {"advId": "1", "advName": "Night Cycle", "isOn": 1, "grouptDevType": 3, "onSpeed": 7},
-        {"advId": "2", "advName": "Night Cycle", "isOn": 1, "grouptDevType": 3, "onSpeed": 7},
+        {"advId": "1", "advName": "Night Cycle", "isOn": 1, "grouptDevType": 3, "onSpeed": 7},
+        {"advId": "2", "advName": "Night Cycle", "isOn": 0, "grouptDevType": 1, "onSpeed": 7},
         {"advId": "3", "advName": "VPD Boost", "isOn": 0, "grouptDevType": 1, "onSpeed": 8},
     ]
     result = normalize_automations(raw)
-    assert len(result) == 2
+    assert [a["adv_id"] for a in result] == ["1", "2", "3"]  # same-named ones stay manageable
     names = [a["name"] for a in result]
     assert "Night Cycle" in names
     assert "VPD Boost" in names

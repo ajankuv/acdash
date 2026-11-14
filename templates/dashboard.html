@@ -1680,10 +1680,73 @@
       for (var i = 1; i <= portCount; i++) {
         cb.innerHTML += '<label class="flex items-center gap-1 text-xs text-zinc-400"><input type="checkbox" value="' + i + '" class="am-port-cb accent-emerald-500"> Port ' + i + '</label>';
       }
+      amLoadList();
+    }
+
+    function amLoadList() {
+      var devId = _amDevId;
       fetch('/api/automations?dev_id=' + encodeURIComponent(devId), {credentials: 'same-origin', cache: 'no-store'})
-        .then(function(r){ return r.json(); })
-        .then(function(list){ amRenderList(list); })
-        .catch(function(){ document.getElementById('am-list').innerHTML = '<p class="text-center text-xs text-red-400">Could not load automations</p>'; });
+        .then(function(r){ return r.json().then(function(d){ return {ok: r.ok, d: d}; }); })
+        .then(function(res){
+          if (devId !== _amDevId) return;
+          if (!res.ok || !Array.isArray(res.d)) { throw new Error((res.d && res.d.error) || 'Could not load automations'); }
+          amRenderList(res.d);
+        })
+        .catch(function(e){
+          if (devId !== _amDevId) return;
+          document.getElementById('am-list').innerHTML = '<p class="text-center text-xs text-red-400">' + escHtml((e && e.message) || 'Could not load automations') + '</p>';
+        });
+    }
+
+    // One automation request at a time: enable/disable FLIPS state server-side, so a
+    // double click must not send two.
+    var _amBusy = false;
+    function amSetBusy(busy, label) {
+      _amBusy = busy;
+      var modal = document.getElementById('automations-modal');
+      Array.prototype.forEach.call(modal.querySelectorAll('button[data-am-action], #am-create-btn'), function(b) {
+        b.disabled = busy;
+        b.classList.toggle('opacity-50', busy);
+        b.classList.toggle('cursor-wait', busy);
+      });
+      var st = document.getElementById('am-status');
+      st.textContent = busy ? (label || 'Working…') : '';
+      st.classList.toggle('hidden', !busy);
+    }
+
+    function amShowError(msg) {
+      var el = document.getElementById('am-error');
+      el.textContent = msg || 'Failed';
+      el.classList.remove('hidden');
+    }
+
+    function amSend(method, url, payload, label) {
+      if (_amBusy) return;
+      document.getElementById('am-error').classList.add('hidden');
+      amSetBusy(true, label);
+      fetch(url, {
+        method: method, credentials: 'same-origin',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(payload)
+      }).then(function(r){
+        return r.json().catch(function(){ return {error: 'Unexpected reply (HTTP ' + r.status + ')'}; });
+      }).then(function(d) {
+        amSetBusy(false);
+        if (d.ok) {
+          if (url === '/api/automation-create') {
+            document.getElementById('am-create-form').classList.add('hidden');
+            document.getElementById('am-add-btn').classList.remove('hidden');
+            document.getElementById('am-new-name').value = '';
+          }
+        } else {
+          amShowError(d.error);
+        }
+        amLoadList();  // always re-read: the list is the truth, success or not
+      }).catch(function() {
+        amSetBusy(false);
+        amShowError('Could not reach acdash — refresh the list and check before retrying.');
+        amLoadList();
+      });
     }
 
     function closeAutomationsModal() {
@@ -1702,6 +1765,11 @@
       // unescaped API data injected directly into onclick strings.
       el.innerHTML = list.map(function(a) {
         var portStr = (a.ports || []).join(', ') || '—';
+        var hm = function(m) { m = m || 0; return String(Math.floor(m / 60)).padStart(2, '0') + ':' + String(m % 60).padStart(2, '0'); };
+        var days = a.days || [];
+        var dayStr = days.length === 7 ? 'every day' : (days.length ? days.map(function(d){ return d.charAt(0).toUpperCase() + d.slice(1); }).join(' ') : 'no days');
+        var modeStr = a.mode === 'on' ? 'ON level ' + a.on_speed : (a.mode === 'off' ? 'OFF level ' + a.off_speed : String(a.mode || '?').toUpperCase());
+        portStr += ' · ' + modeStr + ' · ' + (a.continuous ? 'all day' : hm(a.begin_mins) + '–' + hm(a.end_mins)) + ' · ' + dayStr + (a.running ? ' · running' : '');
         var onCls = a.is_on ? 'bg-emerald-500/20 text-emerald-400 ring-1 ring-emerald-500/30' : 'bg-zinc-800 text-zinc-500 ring-1 ring-zinc-700';
         var safeId = escHtml(String(a.adv_id));
         var safeName = escHtml(String(a.name));
@@ -1709,8 +1777,8 @@
         return '<div data-adv-id="' + safeId + '" class="flex items-center justify-between rounded-xl bg-black/30 px-3 py-2 ring-1 ring-zinc-800/60">' +
           '<div><div class="text-sm text-zinc-200">' + safeName + '</div><div class="text-[11px] text-zinc-500">Ports ' + portStr + '</div></div>' +
           '<div class="flex items-center gap-2">' +
-          '<button data-adv-id="' + safeId + '" data-new-state="' + newState + '" data-name="' + safeName + '" onclick="amToggle(this)" class="rounded-full px-2 py-0.5 text-[11px] font-semibold ' + onCls + '">' + (a.is_on ? 'ON' : 'OFF') + '</button>' +
-          '<button data-adv-id="' + safeId + '" data-name="' + safeName + '" onclick="amDeleteConfirm(this)" class="text-zinc-600 hover:text-zinc-400 text-sm">✕</button>' +
+          '<button data-adv-id="' + safeId + '" data-new-state="' + newState + '" data-name="' + safeName + '" data-am-action="toggle" onclick="amToggle(this)" class="rounded-full px-2 py-0.5 text-[11px] font-semibold ' + onCls + '">' + (a.is_on ? 'ON' : 'OFF') + '</button>' +
+          '<button data-adv-id="' + safeId + '" data-name="' + safeName + '" data-am-action="delete" onclick="amDeleteConfirm(this)" class="text-zinc-600 hover:text-zinc-400 text-sm">✕</button>' +
           '</div></div>';
       }).join('');
     }
@@ -1720,54 +1788,45 @@
     }
 
     function amToggle(btn) {
+      if (_amBusy) return;
       var advId = btn.getAttribute('data-adv-id');
       var newState = btn.getAttribute('data-new-state') === 'true';
       var name = btn.getAttribute('data-name');
       if (!confirm((newState ? 'Enable' : 'Disable') + ' "' + name + '"?')) return;
-      fetch('/api/automation-toggle', {
-        method: 'POST', credentials: 'same-origin',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({dev_id: _amDevId, adv_id: advId, is_on: newState})
-      }).then(function(r){ return r.json(); }).then(function(d) {
-        if (d.ok) { openAutomationsModal(_amDevId); }
-        else { document.getElementById('am-error').textContent = d.error || 'Failed'; document.getElementById('am-error').classList.remove('hidden'); }
-      });
+      amSend('POST', '/api/automation-toggle', {dev_id: _amDevId, adv_id: advId, is_on: newState},
+             (newState ? 'Enabling' : 'Disabling') + ' and confirming…');
     }
 
     function amDeleteConfirm(btn) {
+      if (_amBusy) return;
       var advId = btn.getAttribute('data-adv-id');
       var name = btn.getAttribute('data-name');
       if (!confirm('Delete "' + name + '"?')) return;
-      fetch('/api/automation', {
-        method: 'DELETE', credentials: 'same-origin',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({dev_id: _amDevId, adv_id: advId})
-      }).then(function(r){ return r.json(); }).then(function(d) {
-        if (d.ok) { openAutomationsModal(_amDevId); }
-        else { document.getElementById('am-error').textContent = d.error || 'Failed'; document.getElementById('am-error').classList.remove('hidden'); }
-      });
+      amSend('DELETE', '/api/automation', {dev_id: _amDevId, adv_id: advId}, 'Deleting and confirming…');
+    }
+
+    function amTimeMins(id) {
+      var m = /^(\d{2}):(\d{2})$/.exec(document.getElementById(id).value || '');
+      if (!m) return null;
+      var h = parseInt(m[1], 10), mm = parseInt(m[2], 10);
+      return (h < 24 && mm < 60) ? h * 60 + mm : null;
     }
 
     function submitCreateAutomation() {
+      if (_amBusy) return;
       var name = document.getElementById('am-new-name').value.trim();
-      var ports = Array.prototype.filter.call(document.querySelectorAll('.am-port-cb:checked'), function(c){ return true; }).map(function(c){ return parseInt(c.value); });
-      if (!name || !ports.length) { alert('Name and at least one port are required'); return; }
-      var fp = document.getElementById('am-new-from').value.split(':').map(Number);
-      var tp = document.getElementById('am-new-to').value.split(':').map(Number);
-      fetch('/api/automation-create', {
-        method: 'POST', credentials: 'same-origin',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({
-          dev_id: _amDevId, name: name, ports: ports,
-          on_speed: parseInt(document.getElementById('am-new-on-sp').value),
-          off_speed: parseInt(document.getElementById('am-new-off-sp').value),
-          begin_mins: fp[0]*60 + fp[1],
-          end_mins: tp[0]*60 + tp[1]
-        })
-      }).then(function(r){ return r.json(); }).then(function(d) {
-        if (d.ok) { openAutomationsModal(_amDevId); }
-        else { document.getElementById('am-error').textContent = d.error || 'Failed'; document.getElementById('am-error').classList.remove('hidden'); }
-      });
+      var ports = Array.prototype.map.call(document.querySelectorAll('.am-port-cb:checked'), function(c){ return parseInt(c.value, 10); });
+      if (!name || !ports.length) { amShowError('Name and at least one port are required'); return; }
+      var begin = amTimeMins('am-new-from'), end = amTimeMins('am-new-to');
+      if (begin === null || end === null) { amShowError('Set both From and To times'); return; }
+      if (begin === end) { amShowError("From and To can't be the same time"); return; }
+      amSend('POST', '/api/automation-create', {
+        dev_id: _amDevId, name: name, ports: ports,
+        on_speed: parseInt(document.getElementById('am-new-on-sp').value, 10),
+        off_speed: parseInt(document.getElementById('am-new-off-sp').value, 10),
+        begin_mins: begin,
+        end_mins: end
+      }, 'Creating and confirming…');
     }
   </script>
 {% endblock %}
