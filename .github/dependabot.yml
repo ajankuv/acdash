@@ -26,12 +26,20 @@ updates:
       actions:
         patterns: ["*"]
 
+  # Python version jumps (3.12 → 3.13+) are a deliberate decision, not a weekly PR. Security fixes
+  # still land: every build pulls the current 3.12-alpine and runs `apk upgrade`.
   - package-ecosystem: docker
     directory: /
     schedule:
       interval: weekly
+    ignore:
+      - dependency-name: python
+        update-types: [version-update:semver-major, version-update:semver-minor]
 
   - package-ecosystem: docker
     directory: /ci/fake_acinfinity
     schedule:
       interval: weekly
+    ignore:
+      - dependency-name: python
+        update-types: [version-update:semver-major, version-update:semver-minor]

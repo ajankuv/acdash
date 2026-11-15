@@ -2,7 +2,11 @@
 #
 # - Push to `main`  → `ghcr.io/<owner>/<repo>:latest` (+ short SHA tag)
 #   (except Dependabot merge commits: tested only, published with the next regular push)
-# - Push tag `v*`   → `ghcr.io/<owner>/<repo>:<semver>` and a GitHub Release
+# - Push tag `vX.Y.Z` → `ghcr.io/<owner>/<repo>:X.Y.Z`, `:X.Y`, `:X` and a GitHub Release whose
+#   notes are the `## [X.Y.Z]` section of CHANGELOG.md. The tag must match app/__init__.py.
+#
+# Releasing: bump __version__ in app/__init__.py + add the CHANGELOG.md section → push to
+# main (tests, publishes :latest) → `git tag -a vX.Y.Z -m vX.Y.Z && git push origin vX.Y.Z`.
 #
 # Order: CI (unit + image smoke + upgrade tests, see ci.yml) → push ONLY :<sha> → pull and
 # smoke-test that exact published image → promote it to :latest / :<semver>. Portainer's
@@ -42,10 +46,19 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
+      - name: Version tag matches the app version and has release notes
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::tag $tag is not vX.Y.Z"; exit 1; }
+          app=$(python3 -c 'import ast,sys; t=ast.parse(open("app/__init__.py").read()); print(next(n.value.value for n in t.body if isinstance(n, ast.Assign) and n.targets[0].id == "__version__"))')
+          [ "${tag#v}" = "$app" ] || { echo "::error::tag $tag but app/__init__.py says $app"; exit 1; }
+          grep -q "^## \[${tag#v}\]" CHANGELOG.md || { echo "::error::CHANGELOG.md has no ## [${tag#v}] section"; exit 1; }
+
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
       - name: Login to GHCR
-        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -70,6 +83,7 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          build-args: GIT_SHA=${{ github.sha }}
           cache-from: type=gha
 
   verify-published:
@@ -82,7 +96,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Login to GHCR
-        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -112,20 +126,23 @@ jobs:
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
       - name: Login to GHCR
-        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Promote verified :<sha> to :latest / :<semver>
+      - name: Promote verified :<sha> to :latest / :X.Y.Z, :X.Y, :X
         env:
           SHA_TAG: ${{ needs.docker.outputs.sha_tag }}
         run: |
           repo="ghcr.io/${GITHUB_REPOSITORY,,}"
           args=()
           if [ "$GITHUB_REF" = "refs/heads/main" ]; then args+=(-t "$repo:latest"); fi
-          case "$GITHUB_REF" in refs/tags/v*) args+=(-t "$repo:${GITHUB_REF_NAME#v}");; esac
+          case "$GITHUB_REF" in refs/tags/v*)
+            v="${GITHUB_REF_NAME#v}"
+            args+=(-t "$repo:$v" -t "$repo:${v%.*}" -t "$repo:${v%%.*}");;
+          esac
           if [ ${#args[@]} -eq 0 ]; then echo "nothing to promote"; exit 0; fi
           docker buildx imagetools create "${args[@]}" "$repo:$SHA_TAG"
           echo "promoted $repo:$SHA_TAG → ${args[*]}"
@@ -141,21 +158,25 @@ jobs:
         id: sem
         run: echo "tag=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
 
+      - name: Release notes from CHANGELOG.md
+        run: |
+          v="${{ steps.sem.outputs.tag }}"
+          awk -v h="## [$v]" 'index($0, h) == 1 {on=1; next} on && /^## \[/ {exit} on' CHANGELOG.md > notes.md
+          grep -q '[^[:space:]]' notes.md || { echo "::error::empty CHANGELOG section for $v"; exit 1; }
+          cat >> notes.md <<EOF
+
+          ---
+
+          **Docker image:** \`ghcr.io/${GITHUB_REPOSITORY,,}:$v\` (also \`:${v%.*}\` and \`:${v%%.*}\`, which follow the newest release in that line). \`:latest\` follows \`main\`.
+
+          This exact image passed the unit tests and a container smoke test before and after publishing.
+          EOF
+
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
+        uses: softprops/action-gh-release@8a0cd651e5b2365bd640854a3fa5dfc70e4875f3 # v3.0.4
         with:
-          generate_release_notes: true
-          body: |
-            **Docker image (GHCR — use this in Portainer):**
-
-            ```text
-            ghcr.io/${{ github.repository }}:${{ steps.sem.outputs.tag }}
-            ```
-
-            Git tag is **`${{ github.ref_name }}`**; the container tag is **`${{ steps.sem.outputs.tag }}`** (no `v` prefix).
-
-            For rolling updates from **`main`**, use **`ghcr.io/${{ github.repository }}:latest`** instead.
-
-            This image passed unit tests and a container smoke test before and after publishing.
+          name: AC Dash ${{ github.ref_name }}
+          body_path: notes.md
+          make_latest: "true"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

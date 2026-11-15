@@ -23,6 +23,11 @@ ENV ENV_FILE_PATH=/app/data/.env
 
 RUN mkdir -p /app/data
 
+# Commit this image was built from (CI passes it); shown in /status and the page footer.
+# Kept last so it never invalidates the cached layers above.
+ARG GIT_SHA=dev
+ENV ACDASH_REVISION=${GIT_SHA}
+
 EXPOSE 8080
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \

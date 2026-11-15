@@ -70,7 +70,7 @@
       </main>
 
       <footer class="border-t border-zinc-900 py-6 text-center text-xs text-zinc-600">
-        AC Dash — not affiliated with AC Infinity
+        AC Dash v{{ app_version }}{% if app_revision != "dev" %} ({{ app_revision }}){% endif %} — not affiliated with AC Infinity
       </footer>
     </div>
     {% block modals %}{% endblock %}

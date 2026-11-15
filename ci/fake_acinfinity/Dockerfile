@@ -1,7 +1,11 @@
-FROM python:3.12-slim
+FROM python:3.12-alpine
 WORKDIR /srv
+# Same base and hardening as the app image (security updates, no pip at runtime).
+RUN apk upgrade --no-cache
 COPY requirements.txt .
-RUN pip install --no-cache-dir --upgrade pip && pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir --upgrade pip \
+ && pip install --no-cache-dir -r requirements.txt \
+ && pip uninstall -y pip
 COPY server.py .
 EXPOSE 9000
 HEALTHCHECK --interval=5s --timeout=3s --retries=10 \

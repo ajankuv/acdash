@@ -6,7 +6,7 @@
 > docker pull ghcr.io/ajankuv/acdash:latest
 > ```
 >
-> [**All image tags**](https://github.com/ajankuv/acdash/pkgs/container/acdash) · [Deploy](#deploy)
+> [**Releases**](https://github.com/ajankuv/acdash/releases) · [**All image tags**](https://github.com/ajankuv/acdash/pkgs/container/acdash) · [Changelog](CHANGELOG.md) · [Deploy](#deploy)
 
 A web dashboard for **AC Infinity UIS controllers** that does everything the mobile app does on the cloud side — live sensor readings, history charts, port control, and automation management — from any browser on your LAN.
 
@@ -98,6 +98,16 @@ volumes:
 
 **To update:** pull and redeploy the stack. The `/app/data` volume keeps credentials and history across recreates.
 
+**Image tags:**
+
+| Tag | What it is |
+|-----|-----------|
+| `:latest` | Newest build of `main` (tested before it's published) |
+| `:1.0.0` | One exact release, never changes |
+| `:1.0` / `:1` | Newest release in that line (`:1` takes new features and fixes, but nothing that needs changes on your side) |
+
+What changed in each release is in [`CHANGELOG.md`](CHANGELOG.md) and on the [Releases](https://github.com/ajankuv/acdash/releases) page. The running version shows in the page footer and in `/status`.
+
 **Headless mode** (skip the setup wizard entirely): add these to the stack environment:
 
 ```
@@ -171,9 +181,10 @@ It refuses any other controller, empty/shared/automation ports and ports not in 
 GitHub Actions:
 
 - **`ci.yml`** — every PR and branch push: unit tests → build image → hygiene → smoke test (both write formats) → upgrade/rollback test against the published `:latest` → Trivy scan (report only). Never pushes.
-- **`release-docker.yml`** — `main` and `v*` tags: runs the same CI first, only then pushes to GHCR, then pulls the published `:<sha>` image and smoke-tests it again.
+- **`release-docker.yml`** — `main` and `v*` tags: runs the same CI first, only then pushes to GHCR, then pulls the published `:<sha>` image and smoke-tests it again. `main` moves `:latest`; a `vX.Y.Z` tag publishes `:X.Y.Z`, `:X.Y`, `:X` and a GitHub Release.
+- **Releasing:** bump `__version__` in `app/__init__.py`, add a `## [X.Y.Z] - date` section to `CHANGELOG.md`, push to `main`, then `git tag -a vX.Y.Z -m vX.Y.Z && git push origin vX.Y.Z`. The workflow refuses a tag that doesn't match the app version or has no changelog section.
 - To make critical CVEs block releases, set repository variable **`TRIVY_FAIL_ON_CRITICAL=true`**.
-- Dependabot opens weekly update PRs (pip, Actions, Docker base images); they go through the same CI. Merging one runs the tests on `main` but does **not** publish an image — the update ships with your next regular push.
+- Dependabot opens weekly update PRs (pip, Actions, Docker base images); they go through the same CI. Merging one runs the tests on `main` but does **not** publish an image — the update ships with your next regular push. Python version jumps (3.12 → 3.13+) are skipped on purpose; security patches still come in because every build pulls the current `3.12-alpine` and applies Alpine updates.
 
 ---
 

@@ -19,7 +19,7 @@ from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
-from app import backfill, eventlog, storage
+from app import REVISION, __version__, backfill, eventlog, storage
 from app import status as service_status
 from app.client import ACInfinityClient
 from app.collector import COLLECTOR_INTERVAL, collector_loop
@@ -57,6 +57,7 @@ env = Environment(
     loader=FileSystemLoader(BASE_DIR / "templates"),
     autoescape=select_autoescape(["html", "xml"]),
 )
+env.globals.update(app_version=__version__, app_revision=REVISION)
 
 CACHE_SECONDS = float(os.getenv("CACHE_SECONDS", "45"))
 
@@ -112,7 +113,7 @@ async def lifespan(_app: FastAPI):  # noqa: RUF029
             await task
 
 
-app = FastAPI(title="AC Dash", version="0.1.0", lifespan=lifespan)
+app = FastAPI(title="AC Dash", version=__version__, lifespan=lifespan)
 app.add_middleware(RequestSafetyMiddleware)
 
 
@@ -244,6 +245,7 @@ def status() -> JSONResponse:
     code, body = service_status.snapshot(
         COLLECTOR_INTERVAL, session_active=session_active(), backfill=backfill.status
     )
+    body = {"version": __version__, "revision": REVISION, **body}
     return JSONResponse(body, status_code=code, headers={"Cache-Control": "no-store"})
 
 
